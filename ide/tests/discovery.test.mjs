@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {selectIdeServer,ideServer,agyServer,ideRoot,discoverIdeLog,discoverIdeProcesses} from '../discovery.mjs';
+import {selectIdeServer,ideServer,agyServer,ideRoot,discoverIdeLog,discoverIdeLogPorts,discoverIdeProcesses} from '../discovery.mjs';
 import {validIdeTarget} from '../runtime.mjs';
 import {IdeClient} from '../client.mjs';
 const rows=[
@@ -85,6 +85,113 @@ test('Windows discovery retains only exact main process and its listening ports'
  const run=async file=>file==='powershell.exe'?{stdout:JSON.stringify(rows)}:{stdout:'TCP 127.0.0.1:9000 0.0.0.0:0 LISTENING 10\nTCP 127.0.0.1:8000 0.0.0.0:0 LISTENING 20'};
  const r=await discoverIdeProcesses(9000,{platform:'win32',run});assert.equal(r.ProcessId,20);assert.deepEqual(r.Ports,[8000]);
 });
+
+const localSocket=(pid,port,{state=0,local='127.0.0.1',remote='0.0.0.0',remotePort=0}={})=>({
+ OwningProcess:pid,LocalPort:port,LocalAddress:local,RemoteAddress:remote,RemotePort:remotePort,State:state,
+});
+function windowsDiscoveryFixture({processes=rows.slice(0,2),sockets='',fallback=[],netstatError=false}={}){
+ const calls=[];
+ const run=async(file,args,options)=>{
+  calls.push({file,args,options});
+  if(file==='netstat.exe'){
+   if(netstatError)throw Error('native socket table unavailable');
+   return {stdout:sockets};
+  }
+  if(args.at(-1).includes('Get-CimInstance Win32_Process'))return {stdout:JSON.stringify(processes)};
+  assert.equal(file,'powershell.exe');assert.match(args.at(-1),/Get-NetTCPConnection/);
+  return {stdout:'\uFEFF'+JSON.stringify(fallback)};
+ };
+ return {run,calls};
+}
+
+test('Windows TUN pseudo-listeners do not mask IDE renderer and API ports',async()=>{
+ for(const serverOtherPort of [false,true]){
+  const fixture=windowsDiscoveryFixture({
+   sockets:[
+    'TCP 198.18.0.1:60000 198.18.0.20:0 LISTENING 10',
+    'TCP 198.18.0.1:60001 198.18.0.21:0 LISTENING 20',
+    ...(serverOtherPort?['TCP 127.0.0.1:7777 0.0.0.0:0 LISTENING 20']:[]),
+   ].join('\n'),
+   fallback:[localSocket(10,9000),localSocket(20,8000),localSocket(20,8000)],
+  });
+  const result=await discoverIdeProcesses(9000,{platform:'win32',run:fixture.run});
+  assert.equal(result.rootPid,10);assert.equal(result.ProcessId,20);
+  assert.deepEqual(result.Ports,serverOtherPort?[7777,8000]:[8000]);
+  assert.equal(fixture.calls.length,3,'Only one process scan, native snapshot and batch fallback');
+  assert.ok(fixture.calls.every(call=>call.options.windowsHide===true));
+  assert.ok(fixture.calls.every(call=>call.options.timeout<=8000));
+ }
+});
+
+test('Windows missing renderer port falls back even when the root owns another valid listener',async()=>{
+ const fixture=windowsDiscoveryFixture({
+  sockets:'TCP 127.0.0.1:9001 0.0.0.0:0 LISTENING 10\nTCP 127.0.0.1:8000 0.0.0.0:0 LISTENING 20',
+  fallback:[localSocket(10,9000,{local:'::1',remote:'::'})],
+ });
+ const result=await discoverIdeProcesses(9000,{platform:'win32',run:fixture.run});
+ assert.equal(result.rootPid,10);assert.deepEqual(result.Ports,[8000]);
+ assert.equal(fixture.calls.length,3);
+});
+
+test('Windows IDE recovers from native socket snapshot failure with one owned-port fallback',async()=>{
+ const fixture=windowsDiscoveryFixture({netstatError:true,fallback:[
+  localSocket(10,9000,{state:'Listen'}),localSocket(20,8000,{state:2}),
+  localSocket(99,8001),localSocket(10,65536),
+ ]});
+ const result=await discoverIdeProcesses(9000,{platform:'win32',run:fixture.run});
+ assert.equal(result.rootPid,10);assert.deepEqual(result.Ports,[8000]);
+ assert.equal(fixture.calls.length,3);
+});
+
+test('Windows normal IDE discovery keeps the native two-command fast path',async()=>{
+ const fixture=windowsDiscoveryFixture({sockets:
+  'TCP 127.0.0.1:9000 0.0.0.0:0 LISTENING 10\nTCP [::1]:8000 [::]:0 LISTENING 20\nTCP 198.18.0.1:60000 198.18.0.20:0 LISTENING 99',
+ });
+ const result=await discoverIdeProcesses(9000,{platform:'win32',run:fixture.run});
+ assert.equal(result.rootPid,10);assert.deepEqual(result.Ports,[8000]);
+ assert.equal(fixture.calls.length,2,'Healthy discovery does not launch a PowerShell socket fallback');
+});
+
+test('Windows fallback sockets owned by an Electron helper cannot stand in for the root',async()=>{
+ const fixture=windowsDiscoveryFixture({
+  processes:[...rows.slice(0,2),{ProcessId:70,ParentProcessId:10,Name:'Antigravity IDE.exe',CommandLine:'IDE --type=utility'}],
+  fallback:[localSocket(70,9000),localSocket(20,8000)],
+ });
+ await assert.rejects(discoverIdeProcesses(9000,{platform:'win32',run:fixture.run}),/does not belong/);
+ assert.equal(fixture.calls.length,3);
+});
+
+test('Windows fallback cannot pair another PID socket with the selected server credential',async()=>{
+ const fixture=windowsDiscoveryFixture({
+  sockets:'TCP 127.0.0.1:9000 0.0.0.0:0 LISTENING 10',
+  fallback:[localSocket(99,8000)],
+ });
+ const result=await discoverIdeProcesses(9000,{platform:'win32',run:fixture.run});
+ assert.equal(result.ProcessId,20);assert.deepEqual(result.Ports,[]);
+ await assert.rejects(discoverIdeLog('profile',result.Ports,{
+  list:async()=>['20261101T100000'],read:async()=> 'listening on random port at 8000 for HTTP\n',
+ }),/Waiting for the IDE local API port/);
+});
+
+test('Windows fallback preserves ambiguity when two IDE roots own the renderer port',async()=>{
+ const fixture=windowsDiscoveryFixture({processes:rows,fallback:[
+  localSocket(10,9000),localSocket(20,8000),localSocket(50,9000),localSocket(60,8001),
+ ]});
+ await assert.rejects(discoverIdeProcesses(9000,{platform:'win32',run:fixture.run}),/Multiple Antigravity IDE/);
+});
+
+test('Windows fallback excludes non-listening and non-local sockets from renderer ownership',async()=>{
+ for(const invalid of [
+  localSocket(10,9000,{state:'Bound'}),localSocket(10,9000,{state:100}),
+  localSocket(10,9000,{state:1}),localSocket(10,9000,{state:5}),
+  localSocket(10,9000,{state:null}),localSocket(10,9000,{state:''}),
+  localSocket(10,9000,{local:'198.18.0.1'}),localSocket(10,9000,{remote:'198.18.0.20'}),
+  localSocket(10,9000,{remotePort:443}),
+ ]){
+  const fixture=windowsDiscoveryFixture({fallback:[invalid,localSocket(20,8000)]});
+  await assert.rejects(discoverIdeProcesses(9000,{platform:'win32',run:fixture.run}),/does not belong/);
+ }
+});
 test('macOS/Linux fixtures keep UID and PID lineage rather than newest process',async()=>{
  for(const platform of ['darwin','linux']){
   const suffix=platform==='darwin'?'macos':'linux';
@@ -99,8 +206,29 @@ test('macOS/Linux fixtures keep UID and PID lineage rather than newest process',
  }
 });
 test('IDE client keeps credentials in memory and uses the selected main PID',async()=>{
- const client=new IdeClient({profile:'fixture',debugPort:()=>9000,processes:async()=>({...rows[1],Ports:[8000]}),logPort:async()=>8000});
+ const client=new IdeClient({profile:'fixture',debugPort:()=>9000,processes:async()=>({...rows[1],Ports:[8000]}),logPorts:async()=>[8000]});
  assert.deepEqual(await client.discover(),{port:8000,csrf:'test-only',pid:20});
+});
+
+test('IDE client supplies HTTP log hints when a normal gRPC listener masks a missing API port',async()=>{
+ const fixture=windowsDiscoveryFixture({
+  sockets:'TCP 127.0.0.1:9000 0.0.0.0:0 LISTENING 10\nTCP 127.0.0.1:7777 0.0.0.0:0 LISTENING 20',
+  fallback:[localSocket(20,8000)],
+ });
+ const client=new IdeClient({profile:'fixture',debugPort:()=>9000,logPorts:async()=>[8000],
+  processes:(port,options)=>discoverIdeProcesses(port,{...options,platform:'win32',run:fixture.run})});
+ assert.deepEqual(await client.discover(),{port:8000,pid:20,csrf:'test-only'});
+ assert.equal(fixture.calls.length,3);
+ assert.match(fixture.calls[2].args.at(-1),/@\(20\)/);
+});
+
+test('IDE HTTP log candidates stay newest-first and read at most eight session logs',async()=>{
+ const names=Array.from({length:20},(_,i)=>`202610${String(i+1).padStart(2,'0')}T100000`),readNames=[];
+ const result=await discoverIdeLogPorts('profile',{list:async()=>[...names,'not-a-log'],read:async path=>{
+  const name=path.split(/[\\/]/).at(-2);readNames.push(name);
+  return `listening on random port at ${8000+Number(name.slice(6,8))} for HTTP\nlistening on random port at 7777 for HTTPS\n`;
+ }});
+ assert.deepEqual(result,[8020,8019,8018,8017,8016,8015,8014,8013]);assert.equal(readNames.length,8);
 });
 
 test('inherited sockets never replace the IDE root with its Electron helper or language server',()=>{

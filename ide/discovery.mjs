@@ -2,7 +2,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {readFile,readdir} from 'node:fs/promises';
 import {join} from 'node:path';
-import {parseNetstat,parseLsof,linuxPorts} from '../sidecars/panel/discovery.mjs';
+import {discoverWindowsPorts,parseLsof,linuxPorts,httpLogPorts} from '../sidecars/panel/discovery.mjs';
 const exec=promisify(execFile);
 // The IDE's 2.5.5 language server is deliberately identified by its native
 // name and its IDE sub-client flag.  Do not match the standalone/LSP server:
@@ -80,7 +80,7 @@ export function selectIdeServer(rows,portOwners,debugPort) {
   return {...candidates[0],rootPid:root.ProcessId};
 }
 
-export async function discoverIdeProcesses(debugPort,{platform=process.platform,run=exec,uid=process.getuid?.(),linuxPort=linuxPorts}={}) {
+export async function discoverIdeProcesses(debugPort,{platform=process.platform,run=exec,uid=process.getuid?.(),linuxPort=linuxPorts,expectedApiPorts=[]}={}) {
   let rows,ports;
   if(platform==='win32'){
     // Keep the complete process table so a helper between agy and the
@@ -92,7 +92,13 @@ export async function discoverIdeProcesses(debugPort,{platform=process.platform,
     // normal Windows desktop process list with long command lines.
     const r=await run('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{windowsHide:true,timeout:8000,maxBuffer:8388608});
     const parsed=r.stdout.trim()?JSON.parse(r.stdout.replace(/^\uFEFF/,'')):[];rows=(Array.isArray(parsed)?parsed:[parsed]).filter(row=>processId(row?.ProcessId)!==null).map(row=>({...row,ProcessId:processId(row.ProcessId),ParentProcessId:processId(row.ParentProcessId)}));
-    ports=parseNetstat((await run('netstat.exe',['-ano','-p','tcp'],{windowsHide:true,timeout:4000,maxBuffer:4194304})).stdout);
+    // An unrelated listener on a root PID is not proof that its renderer port
+    // was discovered. TUN socket tables can omit that port while reporting
+    // other listeners, so retain the expected CDP port for the shared fallback.
+    // Unknown rows remain ancestry evidence, never socket-query candidates.
+    const known=rows.filter(row=>ideRoot(row)||ideServer(row)||agyServer(row));
+    const expectedPorts=new Map(known.map(row=>[row.ProcessId,ideRoot(row)?[debugPort]:expectedApiPorts]));
+    ports=await discoverWindowsPorts(known.map(row=>row.ProcessId),{run,expectedPorts});
   }else{
     const {stdout}=await run('/bin/ps',['-ww','-axo','pid=,ppid=,uid=,args='],{timeout:8000,maxBuffer:4194304});
     rows=stdout.split(/\r?\n/).flatMap(line=>{
@@ -127,12 +133,18 @@ export async function discoverIdeProcesses(debugPort,{platform=process.platform,
   return {...selected,Ports:ports.get(selected.ProcessId)||[]};
 }
 
-export async function discoverIdeLog(profile,ports,{read=readFile,list=readdir}={}) {
+export async function discoverIdeLogPorts(profile,{read=readFile,list=readdir}={}) {
   const names=(await list(join(profile,'logs'))).filter(n=>/^\d{8}T\d{6}$/.test(n)).sort().reverse();
+  const ports=new Set();
   for(const name of names.slice(0,8)){
     let log;try{log=await read(join(profile,'logs',name,'ls-main.log'),'utf8');}catch{continue;}
-    const port=[...log.matchAll(/listening on random port at (\d+) for HTTP(?:\s|$)/g)].reverse().map(m=>Number(m[1])).find(p=>ports.includes(p));
-    if(port)return port;
+    for(const port of httpLogPorts(log))ports.add(port);
   }
+  return [...ports];
+}
+
+export async function discoverIdeLog(profile,ports,options) {
+  const port=(await discoverIdeLogPorts(profile,options)).find(port=>ports.includes(port));
+  if(port)return port;
   throw Error('Waiting for the IDE local API port');
 }

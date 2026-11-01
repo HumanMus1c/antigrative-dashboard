@@ -6,6 +6,16 @@ import { join } from 'node:path';
 const exec = promisify(execFile);
 const languageServer = command => /(?:^|[\/\\])language_server(?:_(?:linux|macos|darwin)(?:_(?:x64|arm64))?)?(?:\.exe)?(?:\s|$)/.test(command);
 
+export function httpLogPorts(log) {
+  const ports=new Set();
+  for(const match of log.matchAll(/listening on random port at (\d+) for HTTP(?:\s|$)/g)){
+    const port=Number(match[1]);if(port<1||port>65535)continue;
+    // Keep the most recent occurrence first without retaining complete logs.
+    ports.delete(port);ports.add(port);
+  }
+  return [...ports].reverse();
+}
+
 export function parsePs(text, uid) {
   return text.split(/\r?\n/).flatMap(line => {
     const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.+)$/);
@@ -35,16 +45,71 @@ export function parseProcNet(text) {
   });
 }
 
-export function parseNetstat(text) {
-  const ports=new Map();
+const validPid = value => Number.isSafeInteger(value) && value > 0 && value <= 0xffffffff;
+const validPort = value => Number.isInteger(value) && value > 0 && value <= 65535;
+const address = value => typeof value === 'string' ? value.toLowerCase().replace(/^\[|\]$/g,'') : '';
+const localAddress = value => ['127.0.0.1','0.0.0.0','::1','::','0:0:0:0:0:0:0:1','0:0:0:0:0:0:0:0','localhost'].includes(address(value));
+const unspecifiedAddress = value => ['0.0.0.0','::','0:0:0:0:0:0:0:0','*'].includes(address(value));
+const endpoint = value => {
+  const match=String(value).match(/^(\[[^\]]+\]|[^:\s]+):(\d+|\*)$/);
+  return match ? {address:match[1],port:match[2]} : null;
+};
+const integer = value => typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
+
+function netstatSnapshot(text) {
+  const ports=new Map(),rejectedPids=new Set();
   for(const line of text.split(/\r?\n/)) {
-    const match=line.match(/^\s*TCP\s+(\S+)\s+\S+\s+(?:LISTENING|LISTEN|侦听|监听)\s+(\d+)\s*$/i);
+    const match=line.match(/^\s*TCP\s+(\S+)\s+(\S+)\s+(?:LISTENING|LISTEN|侦听|监听)\s+(\d+)\s*$/i);
     if(!match)continue;
-    const port=Number(match[1].match(/:(\d+)$/)?.[1]),pid=Number(match[2]);
-    if(!Number.isInteger(port)||port<1||port>65535||!Number.isSafeInteger(pid)||pid<1)continue;
+    const local=endpoint(match[1]),remote=endpoint(match[2]),pid=Number(match[3]);
+    if(!validPid(pid))continue;
+    const port=Number(local?.port);
+    // TUN drivers can label outbound fake-IP connections LISTENING. A
+    // non-local endpoint must not suppress the PID-verified CIM fallback.
+    if(!local||!remote||!localAddress(local.address)||!validPort(port)
+      ||!unspecifiedAddress(remote.address)||!(remote.port==='0'||remote.address==='*'&&remote.port==='*')){
+      rejectedPids.add(pid);continue;
+    }
     if(!ports.has(pid))ports.set(pid,new Set());ports.get(pid).add(port);
   }
-  return new Map([...ports].map(([pid,values])=>[pid,[...values]]));
+  return {ports:new Map([...ports].map(([pid,values])=>[pid,[...values]])),rejectedPids};
+}
+
+export function parseNetstat(text) { return netstatSnapshot(text).ports; }
+
+export async function discoverWindowsPorts(pids,{run=exec,expectedPorts=new Map()}={}) {
+  const wanted=new Set(pids.filter(validPid));
+  if(!wanted.size)return new Map();
+  const {stdout}=await run('netstat.exe',['-ano','-p','tcp'],{windowsHide:true,timeout:4000,maxBuffer:4194304}).catch(()=>({stdout:''}));
+  const snapshot=netstatSnapshot(stdout);
+  const ports=new Map([...snapshot.ports].filter(([pid])=>wanted.has(pid)));
+  const missing=[...wanted].filter(pid=>{
+    const found=ports.get(pid)||[],expected=[...(expectedPorts.get(pid)||[])].filter(validPort);
+    // Hints are newest/preferred first. An older HTTP port may have been
+    // reused for gRPC; it cannot suppress recovery of the current HTTP port.
+    if(expected.length)return !found.includes(expected[0]);
+    return !found.length||snapshot.rejectedPids.has(pid);
+  });
+  if(!missing.length)return ports;
+  // Query all affected PIDs once, including sockets with the TUN-reported
+  // nonstandard State 0. Do not accept every remote-port-zero socket: Closed
+  // and Bound are not listeners. Preserve all fields for JS validation.
+  // An exited/no-socket PID must not discard results for the remaining PIDs.
+  const script=`$pulsePids = @(${missing.join(',')}); Get-NetTCPConnection -OwningProcess $pulsePids -ErrorAction SilentlyContinue | Select-Object OwningProcess,LocalAddress,LocalPort,RemoteAddress,RemotePort,State | ConvertTo-Json -Compress`;
+  try {
+    const {stdout}=await run('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{windowsHide:true,timeout:8000,maxBuffer:1048576});
+    const parsed=stdout.replace(/^\uFEFF/,'').trim();
+    const value=parsed?JSON.parse(parsed):[],allowed=new Set(missing);
+    for(const row of Array.isArray(value)?value:[value]){
+      const pid=integer(row?.OwningProcess),port=integer(row?.LocalPort),state=row?.State;
+      const listen=state===2||state==='2'||typeof state==='string'&&/^listen$/i.test(state);
+      const tunUnknown=state===0||state==='0';
+      if(!allowed.has(pid)||!validPort(port)||!localAddress(row?.LocalAddress)
+        ||!unspecifiedAddress(row?.RemoteAddress)||integer(row?.RemotePort)!==0||!(listen||tunUnknown))continue;
+      if(!ports.has(pid))ports.set(pid,[]);if(!ports.get(pid).includes(port))ports.get(pid).push(port);
+    }
+  } catch { /* Keep valid native listeners; retry via the client's existing backoff. */ }
+  return ports;
 }
 
 export async function linuxPorts(pid, { proc = '/proc' } = {}) {
@@ -60,32 +125,15 @@ export async function linuxPorts(pid, { proc = '/proc' } = {}) {
   return [...new Set(rows.filter(row=>inodes.has(row.inode)).map(row=>row.port))];
 }
 
-export async function discoverProcesses({ platform = process.platform, run = exec, uid = process.getuid?.(), proc = '/proc' } = {}) {
+export async function discoverProcesses({ platform = process.platform, run = exec, uid = process.getuid?.(), proc = '/proc', expectedPorts = [] } = {}) {
   if (platform === 'win32') {
     const script = "Get-CimInstance Win32_Process -Filter \"Name='language_server.exe'\" | Where-Object { $_.CommandLine -match '(?:^|\\s)--standalone(?:\\s|=|$)' } | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress";
     const {stdout}=await run('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{windowsHide:true,timeout:8000,maxBuffer:1048576});
     const parsed=stdout.trim()?JSON.parse(stdout.replace(/^\uFEFF/,'')):[];
     const rows=(Array.isArray(parsed)?parsed:[parsed]).filter(row=>Number.isSafeInteger(row?.ProcessId)&&row.ProcessId>0&&/(?:^|\s)--standalone(?:\s|=|$)/.test(row.CommandLine||''));
     if(!rows.length)return [];
-    // One native socket-table snapshot for all candidates, rather than a costly
-    // Get-NetTCPConnection/CIM query for every language_server.exe process.
-    const {stdout:sockets}=await run('netstat.exe',['-ano','-p','tcp'],{windowsHide:true,timeout:4000,maxBuffer:4194304}).catch(()=>({stdout:''}));
-    const ports=parseNetstat(sockets);
-    const missing=rows.filter(row=>!ports.get(row.ProcessId)?.length).map(row=>row.ProcessId);
-    if(missing.length){
-      // One asynchronous fallback for all missing candidates, never a shell
-      // per process or an unverified log-only port paired with a credential.
-      const script=`$pulsePids = @(${missing.join(',')}); Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object { $pulsePids -contains $_.OwningProcess } | Select-Object OwningProcess,LocalPort | ConvertTo-Json -Compress`;
-      try{
-        const {stdout}=await run('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{windowsHide:true,timeout:8000,maxBuffer:1048576});
-        const value=stdout.trim()?JSON.parse(stdout.replace(/^\uFEFF/,'')):[];
-        for(const item of Array.isArray(value)?value:[value]){
-          const pid=Number(item?.OwningProcess),port=Number(item?.LocalPort);
-          if(!missing.includes(pid)||!Number.isInteger(port)||port<1||port>65535)continue;
-          if(!ports.has(pid))ports.set(pid,[]);if(!ports.get(pid).includes(port))ports.get(pid).push(port);
-        }
-      }catch{ /* Keep discovery waiting safely if both socket sources fail. */ }
-    }
+    const ports=await discoverWindowsPorts(rows.map(row=>row.ProcessId),{run,
+      expectedPorts:new Map(rows.map(row=>[row.ProcessId,expectedPorts]))});
     return rows.map(row=>({...row,Ports:ports.get(row.ProcessId)||[]}));
   }
   if (platform === 'darwin') {

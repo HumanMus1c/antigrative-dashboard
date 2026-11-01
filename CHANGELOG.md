@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.17 — 2026-11-01
+
+- Fix [#27](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard/issues/27): reject Windows TUN fake-IP `LISTENING` rows and recover PID-owned local listeners reported with nonstandard `State: 0`. Revalidate local/remote addresses, ports and state; do not accept `Bound`, `Closed`, unrelated processes or log-only credentials.
+- Share bounded Windows socket discovery between the App and IDE. Supplement a missing current HTTP/CDP port even when another listener or a reused historical port exists. Preserve native fast-path discovery, one batched fallback, timeout/output limits, concurrent-request coalescing and retry backoff.
+- When default App log locations coexist, prefer the most recently modified readable log for port hints; a stale profile log no longer masks a newer native log. Explicit log overrides remain authoritative and all ports still require live PID ownership.
+- Add synthetic TUN, partial socket-table, ownership and reconnect regressions. Verify native Windows netstat/CIM discovery in a separate CI/release step with unchanged production timeouts.
+
 ## 0.8.16 — 2026-10-31
 
 - Fix [#26](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard/issues/26): support Antigravity IDE 2.6.0's `agy --hub` backend while retaining the 2.5.5 language-server path. Renderer attachment no longer waits for metrics discovery, so temporary backend failures keep the composer controls mounted and return offline metrics.

@@ -77,7 +77,7 @@ test('discovery falls back from missing/stale logs and clears old server on fail
         return `listening on random port at ${path==='native'&&primary==='stale'?9999:1234} for HTTP\n`;
       }});
     assert.deepEqual(await client.discover(),{port:1234,pid:12,csrf:'test'});
-    assert.deepEqual(reads,primary==='valid'?['native']:['native','profile']);
+    assert.deepEqual(reads,['native','profile']);
     client.readLog=async()=>{throw Object.assign(new Error('missing'),{code:'ENOENT'});};
     await assert.rejects(client.discover(true),/语言服务日志/);assert.equal(client.server,null);
   }
@@ -135,7 +135,7 @@ test('Windows missing netstat listeners use one bounded PID-filtered PowerShell 
    calls.push({file,args,options});
    if(file==='netstat.exe'){if(failNetstat)throw Error('socket table unavailable');return {stdout:''};}
    if(args.at(-1).includes('Get-CimInstance'))return {stdout:JSON.stringify([{ProcessId:12,CommandLine:'ls --standalone'},{ProcessId:112,CommandLine:'ls --standalone'}])};
-   return {stdout:JSON.stringify([{OwningProcess:12,LocalPort:1234},{OwningProcess:112,LocalPort:4321},{OwningProcess:99,LocalPort:9999},{OwningProcess:12,LocalPort:0}])};
+   return {stdout:JSON.stringify([{OwningProcess:12,LocalPort:1234},{OwningProcess:112,LocalPort:4321},{OwningProcess:99,LocalPort:9999},{OwningProcess:12,LocalPort:0}].map(row=>({...row,LocalAddress:'127.0.0.1',RemoteAddress:'0.0.0.0',RemotePort:0,State:2})))};
   }});
   assert.deepEqual(rows.map(r=>r.Ports),[[1234],[4321]]);
   assert.equal(calls.length,3);assert.ok(calls[2].args.at(-1).includes('Get-NetTCPConnection'));

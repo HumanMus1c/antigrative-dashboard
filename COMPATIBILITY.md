@@ -27,7 +27,9 @@ Python 3.10+ 仅用于生命周期，无 pip 依赖；后台使用宿主 Node，
 
 ## Antigravity 自带 IDE
 
-专用包为 `antigrative-dashboard-ide-0.8.16.vsix`，安装入口与桌面 App 独立。
+2026-11-01 / **v0.8.17（Issue #27）**：Windows App 与 IDE 共用本机端口发现，排除 TUN 产生的伪监听行；备用查询兼容报告中的 `State: 0`，同时验证 PID、环回／通配地址、未连接远端及有效端口，拒绝 `Bound`、`Closed` 等状态。HTTP 日志与 renderer 端口只作为补查提示，不能代替进程归属证明；最新端口缺失时，不再被其他监听端口或复用的旧端口掩盖。正常路径保留 netstat，异常路径一次批量 PowerShell 查询，沿用超时、输出上限及客户端退避。本地合成回归与真实 Windows netstat／CIM 检查通过，已安装代码成功发现 App 接口并取得 `GetUserStatus` 响应；宿主停在登录引导页，未完成登录后控件验收。报告者的 TUN `State: 0` 原始环境仍需其复测。
+
+专用包为 `antigrative-dashboard-ide-0.8.17.vsix`，安装入口与桌面 App 独立。
 Windows 11 / IDE 2.5.5（VS Code base 1.107.0）已用真实对话验证速率、缓存、上下文、重启历史恢复和窄宽布局。
 Linux/macOS 的 IDE 进程筛选、端口归属、安装打包和 Trusted Types 浏览器 fixture 纳入 CI；登录后的 IDE GUI 仍待实机验收。
 当前仅支持默认用户 profile；私有 Preact/DOM 或 RPC 变化可能需要适配，不能保证未来 IDE 版本无需维护。

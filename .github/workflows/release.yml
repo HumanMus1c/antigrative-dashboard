@@ -24,6 +24,9 @@ jobs:
         with:
           python-version: '3.11'
       - run: npm test
+      - name: Verify native Windows socket discovery without parallel test load
+        if: runner.os == 'Windows'
+        run: node tools/check-windows-discovery.mjs
       - name: Stream a synthetic corpus above the former 512 MiB cap
         run: node --expose-gc tools/check-trajectory-resources.mjs 640 1024
       - name: Reject over-budget projected statistics without partial cache

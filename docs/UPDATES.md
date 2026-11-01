@@ -111,11 +111,25 @@ Current-conversation requests continue to be recorded during ordinary polling.
 The collector preserves existing usage records and settings. Usage is local
 observed consumption, not provider billing.
 
-Install **v0.8.16** through **Context details → ⋯ → Check for updates**, then fully
+## Windows TUN port discovery (Issue #27)
+
+**v0.8.17** excludes fake-IP `LISTENING` rows that can hide the real local API
+port. The Windows fallback queries candidate PIDs once and revalidates socket
+addresses, ports and states. It accepts the reported nonstandard `State: 0`
+only with a local binding and an unconnected remote endpoint; `Bound`, `Closed`
+and other processes remain excluded.
+
+App and IDE share this fallback. Missing current HTTP/CDP ports trigger a
+supplementary query even when another listener or a reused historical HTTP port
+is visible. Log ports remain hints, not proof of ownership. Native discovery
+keeps its fast path; timeout/output budgets, concurrent-request coalescing and
+failure backoff remain in place. No VPN setting changes or data reset are needed.
+
+Install **v0.8.17** through **Context details → ⋯ → Check for updates**, then fully
 quit and reopen the host once. A plugin-only restart cannot revoke old callbacks
 already recreated in the open page. If an older updater already fails installation,
-use `antigrative-dashboard-0.8.16.zip` for a one-time manual repair; standalone IDE
-users should install `antigrative-dashboard-ide-0.8.16.vsix` and reopen the IDE.
+use `antigrative-dashboard-0.8.17.zip` for a one-time manual repair; standalone IDE
+users should install `antigrative-dashboard-ide-0.8.17.vsix` and reopen the IDE.
 Existing release tags remain available. No statistics reset or manual deletion of
 checkpoint/ledger files is required for this upgrade.
 
