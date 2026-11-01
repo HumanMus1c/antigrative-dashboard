@@ -103,7 +103,7 @@ export async function discoverWindowsPorts(pids,{run=exec,expectedPorts=new Map(
     for(const row of Array.isArray(value)?value:[value]){
       const pid=integer(row?.OwningProcess),port=integer(row?.LocalPort),state=row?.State;
       const listen=state===2||state==='2'||typeof state==='string'&&/^listen$/i.test(state);
-      const tunUnknown=state===0||state==='0';
+      const tunUnknown=state===0||state==='0'||state==null||state==='';
       if(!allowed.has(pid)||!validPort(port)||!localAddress(row?.LocalAddress)
         ||!unspecifiedAddress(row?.RemoteAddress)||integer(row?.RemotePort)!==0||!(listen||tunUnknown))continue;
       if(!ports.has(pid))ports.set(pid,[]);if(!ports.get(pid).includes(port))ports.get(pid).push(port);

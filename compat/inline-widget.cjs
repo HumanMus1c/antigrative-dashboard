@@ -46,7 +46,7 @@ module.exports = function installAgPulseInlineWidget() {
   const seconds=language.elapsed;
   const timer=(at,compact=false)=>language.countdown(at,Date.now(),compact);
   const date=language.resetDate;
-  const label=g=>/gemini/i.test(g?.name||'')?'Gemini':/claude|gpt/i.test(g?.name||'')?'Claude / GPT':g?.name||t('group');
+  const label=g=>/argon/i.test(g?.id||'')||/argon/i.test(g?.name||'')?'Gemini (Argon)':/gemini/i.test(g?.name||'')?'Gemini':/claude|gpt/i.test(g?.name||'')?'Claude / GPT':g?.name||t('group');
   const $=id=>root?.getElementById(id);
   const text=(id,value)=>{const e=$(id);if(e&&e.textContent!==String(value))e.textContent=String(value);};
   const attribute=(element,name,value)=>{if(value===null){if(element.hasAttribute(name))element.removeAttribute(name);}else if(element.getAttribute(name)!==String(value))element.setAttribute(name,String(value));};
@@ -683,7 +683,7 @@ module.exports = function installAgPulseInlineWidget() {
     }
     if(groupMenu)return;
     const groups=data.groups||[],model=composer?.model?.getAttribute('aria-label')||composer?.model?.textContent||data.speed?.model||'';
-    group=groups.find(g=>g.id===chosen)||groups.find(g=>/gemini/i.test(model)?/gemini/i.test(g.id):/claude|gpt/i.test(model)?/3p|claude|gpt/i.test(g.id):false)||groups[0];
+    group=groups.find(g=>g.id===chosen)||(/argon/i.test(model)?groups.find(g=>/argon/i.test(g.id)):null)||groups.find(g=>/gemini/i.test(model)?(g.id==='gemini'||(/gemini/i.test(g.id)&&!/argon/i.test(g.id))):/claude|gpt/i.test(model)?/3p|claude|gpt/i.test(g.id):false)||groups[0];
     for(const button of root.querySelectorAll('.group-trigger')){
       if(button.textContent!==`${label(group)} ▾`)button.textContent=`${label(group)} ▾`;
       const menu=button.parentElement.querySelector('.group-menu'),signature=groups.map(g=>g.id).join('|');

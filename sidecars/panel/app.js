@@ -61,9 +61,15 @@ function localize(){
 function chooseGroup(groups, speed) {
   if (selectedGroup && groups.some(g => g.id === selectedGroup)) return groups.find(g => g.id === selectedGroup);
   const model = String(speed?.model || '').toLowerCase();
-  return groups.find(g => /gemini/.test(model) ? /gemini/i.test(g.id) : /claude|gpt/.test(model) ? /3p|claude|gpt/i.test(g.id) : false) || groups[0] || null;
+  if (/argon/.test(model)) {
+    const argon = groups.find(g => /argon/i.test(g.id));
+    if (argon) return argon;
+  }
+  return groups.find(g => /gemini/.test(model) ? (g.id === 'gemini' || (/gemini/i.test(g.id) && !/argon/i.test(g.id))) : /claude|gpt/.test(model) ? /3p|claude|gpt/i.test(g.id) : false) || groups[0] || null;
 }
 function groupLabel(value) {
+  if (!value) return '—';
+  if (/argon/i.test(value?.id || '') || /argon/i.test(value?.name || '')) return 'Gemini (Argon)';
   return /gemini/i.test(value.name) ? 'Gemini' : /claude|gpt/i.test(value.name) ? 'Claude / GPT' : value.name;
 }
 

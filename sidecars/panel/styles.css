@@ -7,7 +7,8 @@ button,select{font:inherit}button{cursor:pointer}button:focus-visible,select:foc
 .standalone .widget{width:min(480px,calc(100vw - 24px))}
 .widget-header{flex:none;display:flex;align-items:center;gap:8px;height:43px;padding:0 11px;border-bottom:1px solid var(--pulse-separator)}
 .brand{display:flex;align-items:center;gap:6px;flex:1;min-width:0;font-size:10px;font-weight:600;letter-spacing:.1px;color:var(--pulse-foreground)}
-.brand>span:not(.connection-dot){overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.brand .icon{color:var(--pulse-accent)}
+.brand>span:not(.connection-dot):not(.version-tag){overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.brand .icon{color:var(--pulse-accent)}
+.version-tag{flex:none;font-size:9px;font-weight:500;color:var(--pulse-muted);background:var(--pulse-control);border:1px solid var(--pulse-separator);border-radius:4px;padding:1px 5px;line-height:12px;user-select:none;white-space:nowrap}
 .icon{width:13px;height:13px;flex:none;fill:none;stroke:currentColor;stroke-width:1.2;stroke-linecap:round;stroke-linejoin:round}.icon-definitions{position:absolute;width:0;height:0;overflow:hidden}
 .connection-dot{width:4px;height:4px;flex:none;border-radius:50%;background:var(--pulse-dot)}.connection-dot.live{background:var(--pulse-success)}.connection-dot.stale{background:var(--pulse-warning)}
 .header-controls{display:flex;align-items:center;gap:4px;flex:none}select{width:88px;height:25px;border:1px solid var(--pulse-separator);border-radius:6px;padding:0 5px;background:var(--pulse-control);color:var(--pulse-control-text);font-size:10px}

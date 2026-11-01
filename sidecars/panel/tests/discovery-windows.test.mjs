@@ -58,8 +58,9 @@ test('a pseudo listener alongside a valid port still triggers one merged fallbac
 test('normal IPv4/IPv6/Listen/numeric states stay supported; other states cannot pass as zero',async()=>{
   const good=[socket(),socket({LocalPort:1235,State:'0'}),socket({LocalPort:1236,State:'Listen'}),
     socket({LocalPort:1237,State:2,LocalAddress:'::1',RemoteAddress:'::'}),socket({LocalPort:1238,State:'2',LocalAddress:'0.0.0.0'}),
-    socket({LocalPort:1239,State:2,LocalAddress:'::',RemoteAddress:'::'})];
-  const bad=[...['Closed','Bound','Established',1,5,100,null,'',false,{},undefined].map(State=>socket({State})),
+    socket({LocalPort:1239,State:2,LocalAddress:'::',RemoteAddress:'::'}),socket({LocalPort:1240,State:null}),
+    socket({LocalPort:1241,State:''}),socket({LocalPort:1242,State:undefined})];
+  const bad=[...['Closed','Bound','Established',1,5,100,false,{}].map(State=>socket({State})),
     ...[null,'',false,{},undefined,10].map(RemotePort=>socket({RemotePort})),
     ...['198.18.0.1','192.168.1.3','127.0.0.1.evil','example.test',null].map(LocalAddress=>socket({LocalAddress})),
     ...['198.18.0.12','127.0.0.1','example.test',null].map(RemoteAddress=>socket({RemoteAddress})),
@@ -68,7 +69,7 @@ test('normal IPv4/IPv6/Listen/numeric states stay supported; other states cannot
     const {run}=fixture({netstat:'',sockets:[row]});assert.equal((await discoverWindowsPorts([12],{run})).size,0);
   }
   const {run}=fixture({netstat:'',sockets:good});
-  assert.deepEqual((await discoverWindowsPorts([12],{run})).get(12),[1234,1235,1236,1237,1238,1239]);
+  assert.deepEqual((await discoverWindowsPorts([12],{run})).get(12),[1234,1235,1236,1237,1238,1239,1240,1241,1242]);
 });
 
 test('native success avoids PowerShell; malformed, denied or timed-out fallback preserves existing ports',async()=>{
