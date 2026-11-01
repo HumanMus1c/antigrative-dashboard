@@ -3,6 +3,9 @@ const object = value => value && typeof value === 'object' && !Array.isArray(val
 const number = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
 const tokens = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 export const states = ['idle', 'thinking', 'working', 'tool_use', 'initializing'];
+// Exact IDs observed in the official quota map. Never infer a shared Gemini
+// window from an arbitrary gemini-* suffix: Argon has a distinct weekly pool.
+const knownQuotaIds = new Set(['gemini-5h','gemini-weekly','3p-5h','3p-weekly','gemini-argon-wtu-weekly']);
 
 // Empirical statusLine policy: Sonnet 4.6 / GPT-OSS 120B / Gemini 3.8 Flash High,
 // cache writes zero. Do not reuse desktop or cumulative token semantics.
@@ -44,16 +47,22 @@ export function normalize(payload) {
   const input = tokens(usage.input_tokens), read = tokens(usage.cache_read_input_tokens);
   const write = tokens(usage.cache_creation_input_tokens);
   const used = number(context.used_percentage), remaining = number(context.remaining_percentage);
-  const quotas = Object.entries(object(payload.quota)).slice(0, 16).map(([key, raw]) => {
+  const entries = Object.entries(object(payload.quota));
+  // Keep official windows even when unknown buckets precede them. The output
+  // remains bounded; unknown names retain their own sanitized identity.
+  const selected = [...entries.filter(([key]) => knownQuotaIds.has(key)), ...entries.filter(([key]) => !knownQuotaIds.has(key))].slice(0, 16);
+  const quotas = selected.map(([key, raw]) => {
     const value = object(raw), fraction = number(value.remaining_fraction);
     const reset = typeof value.reset_time === 'string' ? Date.parse(value.reset_time) : NaN;
     return {
-      id: cleanText(key, 64), remaining: fraction !== null && fraction <= 1 ? fraction * 100 : null,
+      id: cleanText(key, 64), bucketId: knownQuotaIds.has(key) ? key : null, disabled: value.disabled === true,
+      remaining: value.disabled !== true && fraction !== null && fraction <= 1 ? fraction * 100 : null,
       resetInSeconds: number(value.reset_in_seconds), resetTime: Number.isFinite(reset) ? reset : null,
     };
   }).filter(value => value.id);
   return {
     model: cleanText(model.display_name || model.id) || null,
+    modelId: cleanText(model.id) || null,
     state: states.includes(payload.agent_state) ? payload.agent_state : null,
     width: Number.isInteger(payload.terminal_width) && payload.terminal_width > 0 ? Math.min(500, payload.terminal_width) : 80,
     context: { usedPercentage: used ?? (remaining !== null && remaining <= 100 ? 100 - remaining : null),

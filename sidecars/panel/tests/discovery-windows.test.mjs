@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
-import {discoverProcesses,discoverWindowsPorts,parseNetstat,httpLogPorts} from '../discovery.mjs';
+import {EventEmitter} from 'node:events';
+import {discoverProcesses,discoverWindowsPorts,parseNetstat,httpLogPorts,probeLoopbackPort} from '../discovery.mjs';
 import {AntigravityClient,serverFromDiscovery} from '../client.mjs';
 
 const socket=(fields={})=>({OwningProcess:12,LocalAddress:'127.0.0.1',LocalPort:1234,RemoteAddress:'0.0.0.0',RemotePort:0,State:0,...fields});
@@ -58,9 +59,8 @@ test('a pseudo listener alongside a valid port still triggers one merged fallbac
 test('normal IPv4/IPv6/Listen/numeric states stay supported; other states cannot pass as zero',async()=>{
   const good=[socket(),socket({LocalPort:1235,State:'0'}),socket({LocalPort:1236,State:'Listen'}),
     socket({LocalPort:1237,State:2,LocalAddress:'::1',RemoteAddress:'::'}),socket({LocalPort:1238,State:'2',LocalAddress:'0.0.0.0'}),
-    socket({LocalPort:1239,State:2,LocalAddress:'::',RemoteAddress:'::'}),socket({LocalPort:1240,State:null}),
-    socket({LocalPort:1241,State:''}),socket({LocalPort:1242,State:undefined})];
-  const bad=[...['Closed','Bound','Established',1,5,100,false,{}].map(State=>socket({State})),
+    socket({LocalPort:1239,State:2,LocalAddress:'::',RemoteAddress:'::'})];
+  const bad=[...['Closed','Bound','Established',1,5,100,null,'',false,{},undefined].map(State=>socket({State})),
     ...[null,'',false,{},undefined,10].map(RemotePort=>socket({RemotePort})),
     ...['198.18.0.1','192.168.1.3','127.0.0.1.evil','example.test',null].map(LocalAddress=>socket({LocalAddress})),
     ...['198.18.0.12','127.0.0.1','example.test',null].map(RemoteAddress=>socket({RemoteAddress})),
@@ -69,7 +69,90 @@ test('normal IPv4/IPv6/Listen/numeric states stay supported; other states cannot
     const {run}=fixture({netstat:'',sockets:[row]});assert.equal((await discoverWindowsPorts([12],{run})).size,0);
   }
   const {run}=fixture({netstat:'',sockets:good});
-  assert.deepEqual((await discoverWindowsPorts([12],{run})).get(12),[1234,1235,1236,1237,1238,1239,1240,1241,1242]);
+  assert.deepEqual((await discoverWindowsPorts([12],{run})).get(12),[1234,1235,1236,1237,1238,1239]);
+});
+
+test('explicit null or empty state needs a reachable expected loopback port; a closed port stays rejected',async t=>{
+  const server=createServer(),accepted=[];let payloadBytes=0;
+  server.on('connection',connection=>{accepted.push(connection);connection.on('data',chunk=>payloadBytes+=chunk.length);});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(()=>{for(const connection of accepted)connection.destroy();server.close();});
+  const port=server.address().port;
+  for(const State of [null,'']){
+    const {run,calls}=fixture({netstat:'',sockets:[socket({State,LocalPort:port})]});
+    assert.deepEqual((await discoverWindowsPorts([12],{run,expectedPorts:new Map([[12,[port]]])})).get(12),[port]);
+    assert.equal(calls.length,2,'No extra process/socket enumeration per probe');
+  }
+  for(const connection of accepted)connection.destroy();
+  await new Promise(resolve=>server.close(resolve));
+  assert.equal(payloadBytes,0,'The reachability check sends no HTTP bytes or credentials');
+  for(const State of [null,'']){
+    const {run}=fixture({netstat:'',sockets:[socket({State,LocalPort:port})]});
+    assert.equal((await discoverWindowsPorts([12],{run,expectedPorts:new Map([[12,[port]]])})).size,0);
+  }
+});
+
+test('empty-state compatibility never probes a missing field, foreign PID, invalid tuple or older target',async()=>{
+  let calls=0;const probe=async()=>{calls++;return true;};
+  const invalid=[socket({State:undefined}),socket({State:false}),socket({State:'Bound'}),socket({State:'Closed'}),
+    socket({State:null,OwningProcess:112}),socket({State:null,LocalAddress:'198.18.0.1'}),
+    socket({State:null,RemoteAddress:'127.0.0.1'}),socket({State:null,RemotePort:443}),
+    socket({State:null,LocalPort:4321})];
+  const {run}=fixture({netstat:'',sockets:invalid});
+  assert.equal((await discoverWindowsPorts([12],{run,expectedPorts:new Map([[12,[1234,4321]]]),probe})).size,0);
+  assert.equal(calls,0);
+  const noHint=fixture({netstat:'',sockets:[socket({State:null})]});
+  assert.equal((await discoverWindowsPorts([12],{run:noHint.run,probe})).size,0);assert.equal(calls,0);
+});
+
+test('blank-state probes are deduplicated, bounded to four PIDs, and leave known listener states on the fast path',async()=>{
+  const pids=[12,13,14,15,16,17],sockets=pids.flatMap(pid=>[socket({OwningProcess:pid,State:null}),socket({OwningProcess:pid,State:''})]);
+  const calls=[],{run}=fixture({netstat:'',sockets});
+  const ports=await discoverWindowsPorts(pids,{run,expectedPorts:new Map(pids.map(pid=>[pid,[1234]])),
+    probe:async(port,options)=>{calls.push({port,...options});return true;}});
+  assert.deepEqual([...ports.keys()],[12,13,14,15]);assert.equal(calls.length,4);
+  assert.ok(calls.every(call=>call.port===1234&&call.timeoutMs>0&&call.timeoutMs<=400&&call.signal.aborted));
+  let probes=0;
+  const known=fixture({netstat:'',sockets:[socket({State:null}),socket({State:'Listen'}),socket({LocalPort:4321,State:0})]});
+  assert.deepEqual((await discoverWindowsPorts([12],{run:known.run,expectedPorts:new Map([[12,[1234]]]),probe:async()=>{probes++;return true;}})).get(12),[1234,4321]);
+  assert.equal(probes,0,'Known listening evidence needs no TCP probe');
+});
+
+test('unresponsive probes are cancelled inside the aggregate time budget',async()=>{
+  const pids=[12,13,14,15,16],calls=[];
+  const {run}=fixture({netstat:'',sockets:pids.map(pid=>socket({OwningProcess:pid,State:null}))});
+  const started=performance.now();
+  const ports=await discoverWindowsPorts(pids,{run,expectedPorts:new Map(pids.map(pid=>[pid,[1234]])),
+    probe:(_port,options)=>{calls.push(options);return new Promise(()=>{});}});
+  assert.equal(ports.size,0);assert.ok(calls.length>0&&calls.length<=4);
+  assert.ok(calls.every(call=>call.signal.aborted&&call.timeoutMs<=400));
+  assert.ok(calls.reduce((total,call)=>total+call.timeoutMs,0)<=1500);
+  assert.ok(performance.now()-started<5000,'A non-settling probe cannot stall discovery indefinitely');
+});
+
+test('probe errors retain healthy native ports and do not promote uncertain ones',async()=>{
+  for(const probe of [()=>{throw Error('connect failed');},async()=>{throw Error('connect failed');},async()=>false]){
+    const {run}=fixture({netstat:'TCP 127.0.0.1:4321 0.0.0.0:0 LISTENING 12',sockets:[socket({State:null})]});
+    assert.deepEqual((await discoverWindowsPorts([12],{run,expectedPorts:new Map([[12,[1234]]]),probe})).get(12),[4321]);
+  }
+});
+
+test('loopback probe closes sockets on connect, timeout and cancellation, without writing data',async()=>{
+  for(const mode of ['connect','error','close','timeout','abort']){
+    const socket=new EventEmitter(),controller=new AbortController();let destroyed=0,options;
+    socket.destroy=()=>{destroyed++;};socket.unref=()=>{};socket.write=()=>assert.fail('Probe must not write');
+    const result=probeLoopbackPort(1234,{timeoutMs:10,signal:controller.signal,connect:value=>{
+      options=value;
+      queueMicrotask(()=>{if(mode==='abort')controller.abort();else if(mode!=='timeout')socket.emit(mode,mode==='error'?Error('failed'):undefined);});return socket;
+    }});
+    assert.equal(await result,mode==='connect');assert.equal(destroyed,1);
+    assert.deepEqual(options,{host:'127.0.0.1',port:1234,family:4});
+  }
+  let calls=0;
+  const aborted=new AbortController();aborted.abort();
+  assert.equal(await probeLoopbackPort(1234,{signal:aborted.signal,connect:()=>{calls++;}}),false);
+  for(const port of [0,65536,'1234',NaN])assert.equal(await probeLoopbackPort(port,{connect:()=>{calls++;}}),false);
+  assert.equal(calls,0);
 });
 
 test('native success avoids PowerShell; malformed, denied or timed-out fallback preserves existing ports',async()=>{

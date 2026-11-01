@@ -7,7 +7,7 @@
 Token throughput, cache hits and context usage in the model selector row. Hover over context for five-hour and weekly quotas too.<br>
 Keep the summary visible. Hover for the details.
 
-[![Version 0.8.17](https://img.shields.io/badge/version-0.8.17-91adff?style=flat-square&labelColor=252936)](CHANGELOG.md)
+[![Version 0.8.18](https://img.shields.io/badge/version-0.8.18-91adff?style=flat-square&labelColor=252936)](CHANGELOG.md)
 [![Platforms](https://img.shields.io/badge/host-Windows%20%7C%20Linux%20%7C%20macOS-83d8b9?style=flat-square&labelColor=252936)](COMPATIBILITY.md)
 [![Antigravity 2.21.1 / 2.22.0](https://img.shields.io/badge/Antigravity-2.21.1%20%2F%202.22.0-c5a0ff?style=flat-square&labelColor=252936)](COMPATIBILITY.md)
 [![MIT](https://img.shields.io/badge/license-MIT-d4d9e6?style=flat-square&labelColor=252936)](LICENSE)
@@ -16,7 +16,7 @@ Keep the summary visible. Hover for the details.
 
 </div>
 
-**v0.8.17:** Fix [#27](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard/issues/27): recover local API discovery under Windows TUN networking, reject false listeners, and share bounded port recovery between App and IDE. [Release notes](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard/releases/tag/v0.8.17) · [Compatibility](COMPATIBILITY.md).
+**v0.8.18:** Adapt [PR #28](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard/pull/28): improve Windows TUN discovery, show the installed version in the side panel, and distinguish Argon's weekly quota across App, IDE and CLI. [Release notes](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard/releases/tag/v0.8.18) · [Compatibility](COMPATIBILITY.md).
 
 ## Preview
 
@@ -68,7 +68,7 @@ Keep the summary visible. Hover for the details.
 ## Antigravity IDE
 
 **v0.7.0** adds a separate VSIX for Google's own standalone IDE. Download
-`antigrative-dashboard-ide-0.8.17.vsix` from the release and choose **Install from VSIX…**
+`antigrative-dashboard-ide-0.8.18.vsix` from the release and choose **Install from VSIX…**
 in the IDE's Extensions view. No desktop App installation is required.
 
 Fully quit the IDE, then start it with

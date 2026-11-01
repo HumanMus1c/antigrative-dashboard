@@ -56,7 +56,8 @@ test('Traditional Chinese (zh-TW) provides accurate localized terminology and to
   assert.equal(language.t('cacheMiss'),'未快取輸入');
   assert.equal(language.t('panelSpeed'),'速率');
   assert.equal(language.t('panelCache'),'快取');
-  assert.equal(language.t('panelSharedQuota'),'共用配額');
+  assert.equal(language.t('panelSharedQuota'),'配額');
+  assert.equal(language.t('argonWeek'),'Argon 每週配額');
   assert.equal(language.t('sample',{rounds:2,steps:6,requests:3}),'2 輪 6 步 · 3 次取樣');
   assert.equal(language.countdown('2026-10-08T10:00:00Z',now),'2天 02:00:00');
   assert.equal(language.elapsed(90),'1 分 30 秒');

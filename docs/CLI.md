@@ -18,6 +18,7 @@ Install `agy` using the [official instructions](https://antigravity.google/docs/
 
 ```sh
 node cli/statusline.mjs --preview --language en --no-color
+node cli/statusline.mjs --preview-argon --language en --no-color
 python manage.py install-cli
 python manage.py status-cli
 ```
@@ -44,15 +45,23 @@ Without `--language`, every invocation reads the desktop plugin's persisted `Ant
 | Quota | Supplied bucket IDs and remaining fraction; no guessed model family or reset schedule |
 | Reset | Absolute reset time, falling back to supplied reset seconds; an elapsed reset does not force 100% balance |
 
-Missing is `--`; zero stays zero. Context compaction can lower the percentage. The first row prioritizes context occupancy and cache percentage with bold cyan/purple values, then agent state if it fits. Known Gemini and Claude/GPT quota buckets each occupy a separate row, placing 5h and weekly windows together. The active model family appears first; unknown bucket IDs keep their supplied identity. Remaining quota numbers and bars are green at 70% or above, yellow from 30% up to (but not including) 70%, red below 30%. Red quotas also have a textual `!` so alerts survive monochrome display. Context turns amber at 60%, red at 90%, with `!` at 90%.
+Missing is `--`; zero stays zero. Explicitly disabled quota shows `Unavailable`. Context compaction can lower the percentage. The first row prioritizes context occupancy and cache percentage with bold cyan/purple values, then agent state if it fits. Known Gemini and Claude/GPT quota buckets each occupy a separate row, placing 5h and weekly windows together. A returned Argon weekly bucket gets its own row. The active model family appears first; unknown bucket IDs keep their supplied identity. Remaining quota numbers and bars are green at 70% or above, yellow from 30% up to (but not including) 70%, red below 30%. Red quotas also have a textual `!` so alerts survive monochrome display. Context turns amber at 60%, red at 90%, with `!` at 90%.
 
-Normal output uses at most three lines; wider terminals add progress bars with muted empty tracks. Countdown text is secondary (`↻` means reset). The layout drops countdowns, bars and secondary read counts before truncating narrow rows. Extra quota buckets are indicated with an ellipsis/count where room permits. The native CLI header already shows the model; the custom status line avoids repeating it, while `--details` adds a fourth line for model, capacity and current input/output/cache creation counts. `--width 55` previews a narrow terminal.
+Normal output uses at most three lines, or four when the payload includes the dedicated Argon weekly bucket so all three known quota families stay visible. Wider terminals add progress bars with muted empty tracks. Countdown text is secondary (`↻` means reset). The layout drops countdowns, bars and secondary read counts before truncating narrow rows. Extra unknown quota buckets are indicated with an ellipsis/count where room permits. The native CLI header already shows the model; the custom status line avoids repeating it, while `--details` adds one line for model, capacity and current input/output/cache creation counts. `--width 55` previews a narrow terminal.
 
 Only foreground ANSI colors and text weights are set, allowing light/dark terminal backgrounds. `--no-color`, `NO_COLOR` and `TERM=dumb` disable colors. Automation shells commonly set the last two; a real terminal must not inherit those flags if color is wanted. No system environment variables are changed by installation. Chinese/emoji/grapheme cell widths are handled when truncating labels.
 
 The shared `Claude/GPT` quota label uses **Claude #DA7756** and **GPT #F8FAFC** separately, with a muted slash; the supplied balance is still one shared bucket, not two independent quotas. If the terminal supplies a `COLORFGBG` light-background hint ending in palette index 7 or 15, GPT uses the terminal's default foreground instead of white. Without that hint, a light terminal can use `--no-color`. Exact RGB colors require a true-color terminal. Quota numbers and bars keep the remaining-balance thresholds.
 
 **tok/s is unavailable:** the documented input has no streaming duration. Status-line invocation intervals, tool duration and request wall time cannot substitute for it.
+
+### Argon weekly quota
+
+The adapter recognizes the exact `quota["gemini-argon-wtu-weekly"]` key as **Argon week**. The key is corroborated by [upstream status-line consumers](https://github.com/akitaonrails/ai-usagebar/releases/tag/v1.40.0); its values use the [official quota-map contract](https://antigravity.google/docs/cli/statusline/). Only a returned bucket creates the row. An Argon model name or a Pro plan label alone never creates a quota or a five-hour window.
+
+When the active model is Argon and the dedicated bucket is present, its weekly row appears first. If that bucket is absent but ordinary Gemini buckets are present, those returned shared windows appear first instead. Unknown Argon-looking keys keep their original identity rather than being guessed into a weekly or five-hour pool. The adapter reads only the current payload, without cloud requests, credentials, quota caches or additional `agy` processes.
+
+`node cli/statusline.mjs --preview-argon --language en --no-color` shows synthetic Argon, Gemini and Claude/GPT balances. Tests cover independent/shared payloads, zero/missing/disabled values, exact keys, order changes and narrow multilingual terminals. This does not establish a signed-in Argon session on every CLI version or platform. Nonzero Argon cache-read percentages remain unavailable under the existing unverified-model/version policy; this quota change does not alter cache semantics.
 
 ### Cache percentage (v0.8.1)
 
@@ -92,6 +101,7 @@ Linux's third Sonnet request supplied input 182 and read 18,287 (99.0%); its thi
 # 示例数据预览，不写入统计
 node cli/statusline.mjs --preview --language zh-CN --no-color
 node cli/statusline.mjs --preview --language zh-TW --no-color
+node cli/statusline.mjs --preview-argon --language zh-CN --no-color
 # 默认跟随桌面版保存的语言
 python manage.py install-cli
 # 或单独固定中文
@@ -100,9 +110,11 @@ python manage.py install-cli --language zh-TW
 python manage.py status-cli
 ```
 
-重新打开 `agy` 后，第一行突出上下文占用和缓存率（青色/紫色加粗），读取量作为辅助，状态显示在末尾。Gemini、Claude/GPT 额度各一行，同行排列 5h 与周额度；当前模型所属组优先展示。额度数字与进度条统一按剩余量变色：≥70% 绿色、30%≤剩余<70% 黄色、<30% 红色；红色额度附 `!`。上下文不低于 60% 变黄、不低于 90% 变红并附 `!`。进度条辅助扫读，`↻` 表示重置倒计时，作为次要文字显示。
+重新打开 `agy` 后，第一行突出上下文占用和缓存率（青色/紫色加粗），读取量作为辅助，状态显示在末尾。Gemini、Claude/GPT 额度各一行，同行排列 5h 与周额度；接口返回独立 Argon 周额度时另占一行，当前模型所属组优先展示。额度数字与进度条统一按剩余量变色：≥70% 绿色、30%≤剩余<70% 黄色、<30% 红色；红色额度附 `!`。上下文不低于 60% 变黄、不低于 90% 变红并附 `!`。进度条辅助扫读，`↻` 表示重置倒计时，作为次要文字显示。
 
-窄窗口先隐藏倒计时与进度条，再截断；默认至多三行。模型名称由宿主顶部提供，插件不重复占一行。`--details` 增加模型、容量和当前输入/输出/缓存写入量；`--width 55` 预览窄窗口。只设置前景色和字重，兼容深浅终端背景；`--no-color`、`NO_COLOR` 或 `TERM=dumb` 可关闭颜色。自动化运行环境可能自带这些标志；想看到彩色时，启动 CLI 的真实终端应避免继承这些标志。安装不会修改系统环境变量。
+窄窗口先隐藏倒计时与进度条，再截断；默认至多三行，接口返回独立 Argon 周额度时至多四行，三个已知额度组都能显示。模型名称由宿主顶部提供，插件不重复占一行。`--details` 再增加一行模型、容量和当前输入/输出/缓存写入量；`--width 55` 预览窄窗口。只设置前景色和字重，兼容深浅终端背景；`--no-color`、`NO_COLOR` 或 `TERM=dumb` 可关闭颜色。自动化运行环境可能自带这些标志；想看到彩色时，启动 CLI 的真实终端应避免继承这些标志。安装不会修改系统环境变量。
+
+**Argon 周额度：**精确识别官方状态栏输入中的 `quota["gemini-argon-wtu-weekly"]`，单独显示剩余百分比、进度条和重置时间，不补造 5h 额度。只有接口返回这个 bucket 才创建 Argon 行；未返回时，若存在普通 Gemini 额度，就继续展示该共享组。名称类似但 ID 不同的未来额度保留原名，不猜测周期。缺失/非法百分比显示 `--`，实际零值显示 `0%`，显式禁用显示「不可用」。本次只做状态栏契约数据与本地渲染回归，未在远程服务器登录实测 Argon；原有缓存率判定保持不变。
 
 共享额度标签分别使用 **Claude #DA7756** 与 **GPT #F8FAFC 雪白色**，斜线弱化显示；仍展示官方提供的同一组共享额度，不拆成两份。终端的 `COLORFGBG` 浅色背景标志末尾为 7 或 15 时，GPT 回退为终端默认前景色，避免白字难读；没有提供该标志的浅色终端可用 `--no-color`。精确 RGB 颜色需要真彩色终端支持。额度数字和条形继续按剩余量绿、黄、红分档。
 

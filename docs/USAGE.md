@@ -18,6 +18,42 @@ Model colors are generated from the current host accent and actual background. A
 
 ## Accounting
 
+### Account quota windows
+
+Account quota is reported by the host, separately from the local Token ledger.
+App and IDE use their own authenticated local `RetrieveUserQuotaSummary` service;
+the CLI uses the quota object supplied to its official status line. No quota
+percentage is calculated from the Token totals.
+
+When the host returns `Gemini 4 Argon` with the bucket
+`gemini-argon-wtu-weekly`, the dashboard preserves it as a separate weekly
+allowance. It shows the supplied remaining fraction and reset time and does not
+invent a five-hour window. A true zero remains zero; omitted, null, blank or
+invalid balances stay unknown. If the host only returns the normal `gemini`
+group, Argon uses that existing shared group without creating a fictional
+independent balance. A returned independent Argon group takes precedence, even
+when its balance is zero or unavailable. Manual group selections remain explicit.
+
+The distinction follows the response rather than a hard-coded subscription
+name. The observed paid-Pro response and its separate weekly bucket are
+documented in [AntigravityManager PR #369](https://github.com/Draculabo/AntigravityManager/pull/369);
+that response also describes Ultra's Argon allowance as part of the larger
+Gemini bucket. This does not establish the current allocation of every account.
+Missing groups can also reflect host/version or upstream response limitations.
+
+The installed App 2.28.2 local RPC schema exposes `request` and `forceRefresh`;
+the nested request exposes `project`. It does not provide a `metadata` or
+client-type override to force an extra quota group. A manual quota refresh can
+ask the host to refresh, but the plugin does not impersonate a different cloud
+client, obtain new credentials, or fabricate missing groups. Older IDEs that
+do not return the grouped quota API cannot supply an independent weekly limit.
+
+The normalizer accepts the canonical flat `remainingFraction` field and the
+documented nested `remaining.remainingFraction` adapter shape. Explicit flat
+fields stay authoritative. A flat legacy bucket list is separated by bucket
+family so an Argon weekly record cannot replace the regular Gemini weekly value.
+Unknown explicit periods are not relabelled as five-hour or weekly quotas.
+
 ### Delegated tasks (Boost / Teamwork / subagents)
 
 When the current conversation has delegated work, its Token/cache summary includes

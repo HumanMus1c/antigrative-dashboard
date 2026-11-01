@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.18 — 2026-11-01
+
+- Add dedicated Argon weekly-quota presentation across App, IDE and CLI using the returned `gemini-argon-wtu-weekly` bucket. Weekly-only groups omit the five-hour panel; zero remains exhausted. Accounts without a dedicated Argon group retain the returned shared Gemini group and its original label/windows.
+- Keep all three known CLI quota families visible when Argon is returned. Preserve quota colors, terminal bounds and the existing cache calculation; add `--preview-argon` for a synthetic contract preview.
+- Parse both flat and nested remaining-quota values without treating missing/null values as zero, preserve flat-list bucket families, and use the host's `forceRefresh` request field only for explicit quota refreshes.
+
+- Adapt [PR #28](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard/pull/28) by HumanMus1c: support explicit blank Windows socket states only after validating ownership/address fields and confirming the expected loopback target accepts a TCP connection. Missing state fields stay rejected; probes carry no payload, cover at most four targets, and share a 1.5-second budget.
+- Use shared quota presentation rules in the App, IDE and side panel to distinguish Gemini (Argon), including opaque bucket IDs. Keep manual selections; missing model-specific quota stays unavailable. Refresh option labels when host names change without changing IDs.
+- Show the installed plugin version in the side-panel header from its manifest. Invalid manifests omit the badge; narrow panels hide it while retaining the version in the title tooltip. A manifest-only version change invalidates panel asset URLs.
+- Add real loopback positive/negative discovery checks, IDE ownership regressions, behavioral quota tests and browser checks for model switching, missing groups, renamed groups, manual selection, header sizing and themes.
+
 ## 0.8.17 — 2026-11-01
 
 - Fix [#27](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard/issues/27): reject Windows TUN fake-IP `LISTENING` rows and recover PID-owned local listeners reported with nonstandard `State: 0`. Revalidate local/remote addresses, ports and state; do not accept `Bound`, `Closed`, unrelated processes or log-only credentials.

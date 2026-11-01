@@ -11,6 +11,7 @@ import {trajectoryMetrics} from '../sidecars/panel/metrics.mjs';
 const createTheme=createRequire(import.meta.url)('../compat/theme.cjs');
 const repo=join(dirname(fileURLToPath(import.meta.url)),'..');
 const preview=process.argv.includes('--preview');
+const releaseVersion=JSON.parse(await readFile(join(repo,'plugin.json'),'utf8')).version;
 const html=panelPageSource();
 const code=panelAppSource(),requests=[],errors=[],results=[];
 const id='11111111-1111-1111-1111-111111111111';
@@ -56,6 +57,8 @@ try{
   // Provider reference and unknown compaction must not change the fixture's
   // active 100K host window / 20% occupancy in either language.
   await view.locator('#strip-tps').waitFor();
+  assert.equal(await view.locator('#panel-version').textContent(),'v'+releaseVersion);
+  assert.equal(await view.locator('#panel-name').getAttribute('title'),'Antigrative Dashboard v'+releaseVersion);
   await view.locator('#strip-context').filter({hasText:'20%'}).waitFor();
   assert.equal(await view.locator('#context-tokens').textContent(),'20K / 100K tok');
   assert.equal(await view.locator('#context-provider-limit,#context-compaction-limit,#context-host-limit,#context-note,#transcript-details').count(),0,'Compact context omits duplicate capacities and diagnostic prose');
@@ -109,7 +112,30 @@ try{
   const page=await browser.newPage({viewport:{width,height:800}});page.on('pageerror',e=>errors.push(e.message));prefs={language:'en',revision:1};
   await page.goto(base);await page.locator('#strip-tps').filter({hasText:'51.2'}).waitFor();
   const size=()=>page.locator('.widget').evaluate(e=>({width:e.getBoundingClientRect().width,height:e.getBoundingClientRect().height,overflow:e.scrollWidth>e.clientWidth}));const initial=await size();assert.equal(initial.overflow,false);
+  const header=await page.locator('.widget-header').evaluate(element=>{
+   const rect=element.getBoundingClientRect();
+   const parts=[...element.querySelectorAll('.brand>.icon,#panel-name,#connection-dot,#panel-version,#language-toggle,#quota-group,#refresh-button')]
+    .filter(node=>getComputedStyle(node).display!=='none'&&!node.hidden).map(node=>{
+     const box=node.getBoundingClientRect();return {name:node.id||'brand-icon',left:box.left,right:box.right,top:box.top,bottom:box.bottom,width:box.width};
+    });
+   return {left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom,parts};
+  });
+  for(const part of header.parts){assert.ok(part.width>0,`${width}px header ${part.name} is not squeezed away`);assert.ok(part.left>=header.left&&part.right<=header.right,`${width}px header ${part.name} stays inside`);assert.ok(part.top>=header.top&&part.bottom<=header.bottom);}
+  for(let i=1;i<header.parts.length;i++)assert.ok(header.parts[i-1].right<=header.parts[i].left+.5,`${width}px header controls must not overlap`);
+  assert.equal(await page.locator('#panel-version').isVisible(),width===440,'Badge gives its space back to controls in narrow panels');
+  assert.equal(await page.locator('#panel-name').getAttribute('title'),'Antigrative Dashboard v'+releaseVersion,'Hidden badge remains discoverable through the title');
   for(const name of ['speed','cache','context']){await page.locator(`[data-card=${name}]`).click();assert.deepEqual(await size(),initial);}
+  const badgeColor=()=>page.locator('#panel-version').evaluate(node=>getComputedStyle(node).backgroundColor);
+  const beforeTheme=await badgeColor();
+  await page.evaluate(()=>{const style=document.documentElement.style;style.setProperty('--background','#f7f0e4');style.setProperty('--foreground','#30241d');style.setProperty('--primary','#985322');});
+  await page.waitForFunction(color=>getComputedStyle(document.getElementById('panel-version')).backgroundColor!==color,beforeTheme);
+  assert.equal(await page.locator('html').getAttribute('data-pulse-theme'),'light');
+  const lightBadge=await badgeColor();
+  await page.evaluate(()=>{const style=document.documentElement.style;style.setProperty('--background','#201b18');style.setProperty('--foreground','#f4e8df');style.setProperty('--primary','#db8e59');});
+  await page.waitForFunction(color=>getComputedStyle(document.getElementById('panel-version')).backgroundColor!==color,lightBadge);
+  assert.equal(await page.locator('html').getAttribute('data-pulse-theme'),'dark');
+  assert.deepEqual(await size(),initial,'Host theme changes preserve panel geometry');
+  await page.waitForTimeout(180); // Capture the settled host-theme transition.
   await page.screenshot({path:join(repo,`.data/sidebar-design/width-${width}.png`)});await page.close();
  }
  const page=await browser.newPage();page.on('pageerror',e=>errors.push(e.message));prefs={language:'en',revision:1};failMetrics=true;

@@ -26,13 +26,13 @@ export function truncate(text, width) {
 
 const labels = {
   en: { context: 'Context', shortContext: 'Ctx', cache: 'Cache', read: 'read', capacity: 'Capacity', created: 'Cache write', input: 'Input', output: 'Output',
-    left: 'left', reset: 'reset', quota: 'Quota', week: 'week', unknown: 'Unknown', idle: 'Ready', thinking: 'Thinking',
+    left: 'left', reset: 'reset', quota: 'Quota', week: 'week', disabled: 'Unavailable', unknown: 'Unknown', idle: 'Ready', thinking: 'Thinking',
     working: 'Working', tool_use: 'Tool', initializing: 'Starting' },
   'zh-CN': { context: '上下文', shortContext: '上下文', cache: '缓存', read: '读取', capacity: '容量', created: '缓存写入', input: '输入', output: '输出',
-    left: '剩余', reset: '重置', quota: '额度', week: '周', unknown: '未知', idle: '就绪', thinking: '思考中',
+    left: '剩余', reset: '重置', quota: '额度', week: '周', disabled: '不可用', unknown: '未知', idle: '就绪', thinking: '思考中',
     working: '生成中', tool_use: '工具', initializing: '启动中' },
   'zh-TW': { context: '上下文', shortContext: '上下文', cache: '快取', read: '讀取', capacity: '容量', created: '快取寫入', input: '輸入', output: '輸出',
-    left: '剩餘', reset: '重設', quota: '配額', week: '週', unknown: '未知', idle: '就緒', thinking: '思考中',
+    left: '剩餘', reset: '重設', quota: '配額', week: '週', disabled: '無法使用', unknown: '未知', idle: '就緒', thinking: '思考中',
     working: '生成中', tool_use: '工具', initializing: '啟動中' },
 };
 
@@ -84,15 +84,23 @@ export function render(metrics, { language = 'en', width = metrics.width, color 
 
   // Group only exact contract IDs; unknown future buckets keep their identity.
   const known = { 'gemini-5h': ['gemini', 'Gemini', '5h', 36], 'gemini-weekly': ['gemini', 'Gemini', l.week, 36],
-    '3p-5h': ['3p', 'Claude/GPT', '5h', 35], '3p-weekly': ['3p', 'Claude/GPT', l.week, 35] };
+    '3p-5h': ['3p', 'Claude/GPT', '5h', 35], '3p-weekly': ['3p', 'Claude/GPT', l.week, 35],
+    'gemini-argon-wtu-weekly': ['gemini-argon', 'Argon', l.week, 36] };
   const groups = new Map();
   for (const quota of metrics.quotas) {
-    const [id, name, window, code] = known[quota.id] || [quota.id, quota.id, null, 36];
-    if (!groups.has(id)) groups.set(id, { id, name, code, known: !!known[quota.id], windows: [] });
-    groups.get(id).windows.push({ ...quota, window });
+    const mapping = known[quota.bucketId];
+    const [id, name, window, code] = mapping || [quota.id, quota.id, null, 36];
+    const key = (mapping ? 'family:' : 'bucket:') + id;
+    if (!groups.has(key)) groups.set(key, { id, name, code, known: !!mapping, windows: [] });
+    groups.get(key).windows.push({ ...quota, window });
   }
-  const active = /^gemini\b/i.test(metrics.model || '') ? 'gemini' : /^(claude\b|gpt\b|o[134](?:-|$))/i.test(metrics.model || '') ? '3p' : null;
-  const sorted = [...groups.values()].sort((a, b) => (b.id === active ? 1 : 0) - (a.id === active ? 1 : 0) ||
+  const model = metrics.modelId || metrics.model || '';
+  const argon = /(?:^|[^a-z])argon(?:$|[^a-z])/i.test(model);
+  // The payload, not a plan-name guess or the model label alone, determines
+  // whether this account exposes a dedicated Argon pool. Never create one.
+  const active = argon ? (groups.has('family:gemini-argon') ? 'gemini-argon' : groups.has('family:gemini') ? 'gemini' : null)
+    : /^gemini\b/i.test(model) ? 'gemini' : /^(claude\b|gpt\b|o[134](?:-|$))/i.test(model) ? '3p' : null;
+  const sorted = [...groups.values()].sort((a, b) => (b.known && b.id === active ? 1 : 0) - (a.known && a.id === active ? 1 : 0) ||
     (b.known ? 1 : 0) - (a.known ? 1 : 0) || a.name.localeCompare(b.name));
   const quotaRow = (group, bars, resets) => {
     // 3p is one shared quota bucket, but each model label keeps its own color.
@@ -107,21 +115,24 @@ export function render(metrics, { language = 'en', width = metrics.width, color 
       if (quota.window) row.push(part(`${quota.window} `));
       const alert = quota.remaining !== null && quota.remaining < 30;
       const code = quota.remaining === null ? 39 : quota.remaining >= 70 ? 32 : quota.remaining >= 30 ? 33 : 31;
-      row.push(part(percentage(quota.remaining), code, true));
+      row.push(part(quota.disabled ? l.disabled : percentage(quota.remaining), code, true));
       if (alert) row.push(part(' !', code, true));
       if (bars && quota.remaining !== null) row.push(subtle(' '), ...bar(quota.remaining, code, 5));
-      const reset = countdown(quota, now);
+      const reset = quota.disabled ? null : countdown(quota, now);
       if (resets && reset !== null) row.push(subtle(`  ↻ ${reset}`));
     }
     return row;
   };
   const lines = [paint(main)];
   if (!sorted.length) lines.push(paint([subtle(`${l.quota} --`)]));
-  for (const group of sorted.slice(0, 2)) {
+  // A third returned known family must not disappear behind the old two-row
+  // limit. Retain the previous bound when there is no dedicated Argon bucket.
+  const visible = sorted.slice(0, groups.has('family:gemini-argon') ? 3 : 2);
+  for (const group of visible) {
     let row = quotaRow(group, width >= 100, width >= 80);
     if (displayWidth(plain(row)) > width) row = quotaRow(group, false, width >= 80);
     if (displayWidth(plain(row)) > width) row = quotaRow(group, false, false);
-    if (sorted.length > 2 && group === sorted[1]) row.push(subtle(`  … +${sorted.length - 2}`));
+    if (sorted.length > visible.length && group === visible.at(-1)) row.push(subtle(`  … +${sorted.length - visible.length}`));
     lines.push(paint(row));
   }
   if (details) {

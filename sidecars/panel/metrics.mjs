@@ -184,20 +184,47 @@ export function trajectoryMetrics(response, storage = null) {
 }
 
 export function quotaMetrics(response, now = Date.now()) {
-  const root = response.response || response;
-  const groups = root.groups?.length ? root.groups : root.buckets?.length ? [{ displayName: '账户额度', buckets: root.buckets }] : [];
+  const object=value=>value&&typeof value==='object'&&!Array.isArray(value);
+  const text=value=>typeof value==='string'?value:'';
+  const root = object(response?.response)?response.response:object(response)?response:{};
+  const bucketFamily=bucket=>text(bucket?.bucketId).replace(/-(5h|weekly)$/, '');
+  const cadence=bucket=>{
+    // Do not reinterpret an explicitly different cadence from its name.
+    if(Object.hasOwn(bucket,'window'))return ['5h','weekly'].includes(bucket.window)?bucket.window:null;
+    return text(bucket.bucketId).match(/-(5h|weekly)$/)?.[1]||null;
+  };
+  const remainingValue=(bucket,field)=>Object.hasOwn(bucket,field)?bucket[field]
+    :object(bucket.remaining)?bucket.remaining[field]:undefined;
+  const fraction=value=>{
+    // Proto JSON uses a number. Also accept decimal text from legacy adapters,
+    // but never turn null, blanks, booleans or arrays into an exhausted quota.
+    if(typeof value!=='number'&&!(typeof value==='string'&&/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(value)))return null;
+    const result=Number(value);return Number.isFinite(result)&&result>=0&&result<=1?result:null;
+  };
+  let groups=Array.isArray(root.groups)?root.groups.filter(object):[];
+  if(!groups.length&&Array.isArray(root.buckets)){
+    // Older summaries may return only a flat bucket list. Keep each bucket
+    // family distinct so Argon's weekly allowance cannot replace Gemini's.
+    const families=new Map();
+    for(const [index,bucket]of root.buckets.entries()){
+      if(!object(bucket))continue;
+      const key=bucketFamily(bucket)||`group-${index}`;
+      if(!families.has(key))families.set(key,{displayName:text(bucket.displayName)||key,buckets:[]});
+      families.get(key).buckets.push(bucket);
+    }
+    groups=[...families.values()];
+  }
   return groups.map((group, index) => ({
-    id: group.buckets?.[0]?.bucketId?.replace(/-(5h|weekly)$/, '') || `group-${index}`,
-    name: group.displayName || `额度组 ${index + 1}`, description: group.description || '',
+    id: (Array.isArray(group.buckets)?group.buckets.filter(object).map(bucketFamily).find(Boolean):null)||`group-${index}`,
+    name: text(group.displayName) || `额度组 ${index + 1}`, description: text(group.description),
     windows: Object.fromEntries(['5h', 'weekly'].map(window => {
-      const bucket = (group.buckets || []).find(b => b.window === window || b.bucketId?.endsWith(`-${window}`));
+      const bucket = (Array.isArray(group.buckets)?group.buckets:[]).find(b=>object(b)&&cadence(b)===window);
       if (!bucket) return [window, { available: false, reason: '账户未返回此额度窗口' }];
-      const fraction = Number(bucket.remainingFraction);
-      const remaining = bucket.remainingFraction !== undefined && Number.isFinite(fraction) && fraction >= 0 && fraction <= 1 ? fraction : null;
-      const date = Date.parse(bucket.resetTime);
-      return [window, { available: true, id: bucket.bucketId, remaining, amount: tokenCount(bucket.remainingAmount),
+      const remaining = fraction(remainingValue(bucket,'remainingFraction'));
+      const date = typeof bucket.resetTime==='string'&&/^\d{4}-\d{2}-\d{2}T/.test(bucket.resetTime)?Date.parse(bucket.resetTime):NaN;
+      return [window, { available: true, id: text(bucket.bucketId), remaining, amount: tokenCount(remainingValue(bucket,'remainingAmount')),
         resetAt: Number.isFinite(date) ? new Date(date).toISOString() : null,
-        expired: Number.isFinite(date) && date <= now, disabled: bucket.disabled === true, description: bucket.description || '' }];
+        expired: Number.isFinite(date) && date <= now, disabled: bucket.disabled === true, description: text(bucket.description) }];
     })),
   }));
 }

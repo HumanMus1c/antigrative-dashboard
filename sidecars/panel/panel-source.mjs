@@ -21,9 +21,26 @@ export function panelAppSource(){
  return `(()=>{'use strict';\n${format}\nconst createI18n=(${factory('i18n')});\nconst createTheme=(${factory('theme')});\n${app}\n})();`;
 }
 
-export function panelPageSource(){
+function panelVersion(readManifest){
+ try{
+  const manifest=JSON.parse(readManifest()),value=manifest?.version;
+  // Only an installed plugin manifest can supply the release badge. A broken
+  // or unrelated manifest must not invent a version or inject HTML attributes.
+  if(manifest?.name!=='antigravity-pulse'||typeof value!=='string'||value.length>64)return null;
+  return /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(value)?value:null;
+ }catch{return null;}
+}
+
+export function panelPageSource({readManifest=()=>readFileSync(join(HERE,'../../plugin.json'),'utf8')}={}){
  const assets=/(href|src)="\/(theme\.css|styles\.css|app\.js)(?:\?[^\"]*)?"/g;
- const html=readFileSync(join(HERE,'index.html'),'utf8').replace(/<meta name="ag-pulse-panel-assets"[^>]*>/g,'').replace(assets,'$1="/$2"');
+ let html=readFileSync(join(HERE,'index.html'),'utf8').replace(/<meta name="ag-pulse-panel-assets"[^>]*>/g,'').replace(assets,'$1="/$2"');
+ const release=panelVersion(readManifest);
+ if(release){
+  // The title keeps the version discoverable when the narrow layout hides its
+  // badge. Insert before hashing so even a manifest-only update busts caches.
+  html=html.replace('<span id="panel-name">',`<span id="panel-name" title="Antigrative Dashboard v${release}">`)
+   .replace('<span class="version-tag" id="panel-version" hidden></span>',`<span class="version-tag" id="panel-version" title="v${release}">v${release}</span>`);
+ }
  const version=createHash('sha256').update(html).update(panelAppSource()).update(readFileSync(join(HERE,'styles.css'))).update(readFileSync(join(HERE,'../../compat/theme.cjs'))).digest('hex').slice(0,16);
  return html.replace(assets,(_,attribute,path)=>`${attribute}="/${path}?v=${version}"`).replace('</head>',`<meta name="ag-pulse-panel-assets" content="${version}"></head>`);
 }

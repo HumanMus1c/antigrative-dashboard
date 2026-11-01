@@ -1,4 +1,4 @@
-// Shared, serializable translations for the inline widget and native panel.
+// Shared, serializable translations and quota presentation for both renderers.
 module.exports = function createDashboardI18n(initialLanguage) {
   const dictionary={
     en:{
@@ -8,7 +8,7 @@ module.exports = function createDashboardI18n(initialLanguage) {
       tokenLegacy:'Saved token usage is a lower bound (≥); request-level coverage cannot be verified.',unknownCoverage:'unknown',
       cacheZeroInput:'Reported total input is 0; the cache hit rate has no denominator.',
       savedCache:'Cache ratio uses saved statistics ({time}).',savedSpeed:'Speed uses saved statistics ({time}).',
-      panelSpeed:'Speed',panelCache:'Cache',panelContext:'Context',panelDetails:'Metric details',panelUsed:'used',panelSharedQuota:'Shared quota',
+      panelSpeed:'Speed',panelCache:'Cache',panelContext:'Context',panelDetails:'Metric details',panelUsed:'used',panelSharedQuota:'Quota',argonWeek:'Argon weekly quota',
       newConversationStats:'New conversation: send a message or open an existing conversation to view its statistics. Account quota is shown separately below.',
       subagentStats:'Current subagent statistics',accountQuota:'Account quota, shared across agents.',
       taskOwn:'Current agent',taskSubagents:'Subagents ({n})',taskLoading:'Summing subagents…',taskPartial:'Some subagents unavailable',taskCurrentOnly:'Current agent only; subagent statistics unavailable.',
@@ -40,7 +40,7 @@ module.exports = function createDashboardI18n(initialLanguage) {
       tokenLegacy:'已保存 Token 用量为下界（≥）；无法确认逐请求统计覆盖情况。',unknownCoverage:'未知',
       cacheZeroInput:'报告的总输入为 0，缓存命中率无可计算的分母。',
       savedCache:'缓存率使用已保存统计（{time}）。',savedSpeed:'速度使用已保存统计（{time}）。',
-      panelSpeed:'速度',panelCache:'缓存',panelContext:'上下文',panelDetails:'统计详情',panelUsed:'已用',panelSharedQuota:'共享额度',
+      panelSpeed:'速度',panelCache:'缓存',panelContext:'上下文',panelDetails:'统计详情',panelUsed:'已用',panelSharedQuota:'额度',argonWeek:'Argon 周额度',
       newConversationStats:'当前为新对话：发送消息或打开已有对话后显示该会话统计。账号额度在下方单独展示。',
       subagentStats:'当前子代理统计',accountQuota:'账号共享额度，所有代理共用。',
       taskOwn:'当前代理',taskSubagents:'子代理（{n}）',taskLoading:'正在汇总子代理…',taskPartial:'部分子代理暂不可读取',taskCurrentOnly:'仅当前代理；子代理统计暂不可用',
@@ -69,7 +69,7 @@ module.exports = function createDashboardI18n(initialLanguage) {
       tokenLegacy:'已儲存的 Token 用量為下限（≥）；無法確認個別請求的統計涵蓋情況。',unknownCoverage:'未知',
       cacheZeroInput:'回報的總輸入為 0，快取命中率無有效的分母可供計算。',
       savedCache:'快取率使用已儲存的統計資料（{time}）。',savedSpeed:'生成速率使用已儲存的統計資料（{time}）。',
-      panelSpeed:'速率',panelCache:'快取',panelContext:'上下文',panelDetails:'統計詳細資料',panelUsed:'已用',panelSharedQuota:'共用配額',
+      panelSpeed:'速率',panelCache:'快取',panelContext:'上下文',panelDetails:'統計詳細資料',panelUsed:'已用',panelSharedQuota:'配額',argonWeek:'Argon 每週配額',
       newConversationStats:'目前為新對話：傳送訊息或開啟既有對話後將顯示統計資料。帳號配額於下方單獨顯示。',
       subagentStats:'目前子代理 (Subagent) 統計',accountQuota:'帳號共用配額，供所有代理共用。',
       taskOwn:'目前代理',taskSubagents:'子代理（{n}）',taskLoading:'正在彙總子代理…',taskPartial:'部分子代理暫時無法讀取',taskCurrentOnly:'僅目前代理；子代理統計暫時無法取得',
@@ -254,5 +254,40 @@ module.exports = function createDashboardI18n(initialLanguage) {
     if (speed.latestRateStatus === 'legacy') return t('ratePending');
     return t(speed.rateBasis==='all-output'?'allBasis':'responseBasis');
   }
-  return {mountLanguagePicker,t,rateNote,countdown,elapsed,resetDate,errorMessage,connectPreferences,get language(){return language;},setLanguage(value){language=value==='zh-CN'||value==='zh-TW'?value:'en';if(language!=='en')lastZh=language;},toggle(){language=language==='en'?(lastZh||'zh-TW'):'en';return language;}};
+  // Shared serializable quota presentation policy for App, IDE and sidecar.
+  // Bucket IDs can be opaque; labels and automatic selection must agree on
+  // the host display name as well. Keep unrelated future groups intact.
+  function quotaGroupKind(group) {
+    const id=String(group?.id||''),name=String(group?.name||''),value=id+' '+name;
+    if(/(?:^|[^a-z])argon(?:$|[^a-z])/i.test(value))return 'gemini-argon';
+    if(/gemini/i.test(value))return 'gemini';
+    if(/claude|gpt/i.test(value)||/^3p(?:$|[-_])/i.test(id))return '3p';
+    return null;
+  }
+  function quotaGroupLabel(group) {
+    if(!group)return '—';
+    return ({'gemini-argon':'Gemini (Argon)',gemini:'Gemini','3p':'Claude / GPT'})[quotaGroupKind(group)]||group.name||group.id||t('group');
+  }
+  function chooseQuotaGroup(groups,models,selected) {
+    const list=Array.isArray(groups)?groups.filter(g=>g&&typeof g.id==='string'):[];
+    const manual=list.find(g=>g.id===selected);if(manual)return manual;
+    const candidates=Array.isArray(models)?models:[models];
+    const kind=candidates.map(model=>quotaGroupKind({name:typeof model==='string'?model:''})).find(Boolean);
+    const specific=kind&&list.find(g=>quotaGroupKind(g)===kind);
+    if(specific)return specific;
+    // Ultra can expose Argon within the original shared Gemini bucket. Keep
+    // that bucket's own name/windows; never relabel it as a separate Argon
+    // allowance. Prefer a dedicated host-reported group whenever it exists.
+    if(kind==='gemini-argon')return list.find(g=>g.id==='gemini'&&quotaGroupKind(g)==='gemini')||null;
+    return kind?null:list[0]||null;
+  }
+  function quotaWindows(group){
+    const windows=['5h','weekly'],present=windows.filter(key=>group?.windows?.[key]?.available===true);
+    return present.length?present:windows;
+  }
+  function quotaRemaining(bucket){
+    const value=bucket?.remaining;
+    return bucket?.disabled===true||bucket?.available===false||typeof value!=='number'||!Number.isFinite(value)||value<0||value>1?null:value;
+  }
+  return {mountLanguagePicker,t,rateNote,quotaGroupKind,quotaGroupLabel,chooseQuotaGroup,quotaWindows,quotaRemaining,countdown,elapsed,resetDate,errorMessage,connectPreferences,get language(){return language;},setLanguage(value){language=value==='zh-CN'||value==='zh-TW'?value:'en';if(language!=='en')lastZh=language;},toggle(){language=language==='en'?(lastZh||'zh-TW'):'en';return language;}};
 };

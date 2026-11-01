@@ -7,6 +7,7 @@ const MAX_INPUT = 256 * 1024;
 const help = `Antigrative Dashboard for Antigravity CLI (Node.js 20+)
 Reads the official statusLine JSON from stdin. No network or transcript access.
   --preview           Render synthetic data; does not write statistics
+  --preview-argon     Render synthetic Gemini, Argon weekly and Claude/GPT quotas
   --language en|zh-CN|zh-TW  Override shared desktop language preference
   --width 1..500       Override terminal columns
   --details           Include capacity and current request token counts
@@ -19,7 +20,7 @@ function options(args) {
   const result = {};
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (['--preview', '--details', '--json', '--help', '--no-color'].includes(arg)) result[arg.slice(2)] = true;
+    if (['--preview', '--preview-argon', '--details', '--json', '--help', '--no-color'].includes(arg)) result[arg.slice(2)] = true;
     else if (arg === '--language') {
       const value = args[++i];
       if (!['en', 'zh-CN', 'zh-TW'].includes(value)) throw new Error('Invalid option');
@@ -43,21 +44,30 @@ async function input() {
   return JSON.parse(Buffer.concat(chunks).toString('utf8').replace(/^\uFEFF/, ''));
 }
 
-function preview() {
-  return {
+function preview(argon = false) {
+  const result = {
     version: '1.3.2', model: { id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4.6 (Thinking)' }, agent_state: 'working', terminal_width: 100,
     context_window: { used_percentage: 44.2, context_window_size: 1048576,
       current_usage: { input_tokens: 190, output_tokens: 346, cache_read_input_tokens: 17244, cache_creation_input_tokens: 0 } },
     quota: { 'gemini-5h': { remaining_fraction: 0.72, reset_in_seconds: 8100 },
       'gemini-weekly': { remaining_fraction: 0.9378, reset_in_seconds: 560580 } },
   };
+  if (argon) {
+    result.version = '1.4.5';
+    result.model = { id: 'gemini-4-argon-high', display_name: 'Gemini 4 Argon (High)' };
+    result.agent_state = 'idle';
+    result.quota['gemini-argon-wtu-weekly'] = { remaining_fraction: 0.4, reset_in_seconds: 345600 };
+    result.quota['3p-5h'] = { remaining_fraction: 0.82, reset_in_seconds: 3600 };
+    result.quota['3p-weekly'] = { remaining_fraction: 0.24, reset_in_seconds: 172800 };
+  }
+  return result;
 }
 
 try {
   const opts = options(process.argv.slice(2));
   if (opts.help) process.stdout.write(help);
   else {
-    const metrics = normalize(opts.preview ? preview() : await input());
+    const metrics = normalize(opts.preview || opts['preview-argon'] ? preview(opts['preview-argon']) : await input());
     const saved = await new PreferencesStore().snapshot();
     const language = opts.language || saved.language || 'en';
     process.stdout.write((opts.json ? JSON.stringify(metrics) : render(metrics, {

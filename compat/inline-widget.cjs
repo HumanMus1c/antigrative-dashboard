@@ -46,7 +46,7 @@ module.exports = function installAgPulseInlineWidget() {
   const seconds=language.elapsed;
   const timer=(at,compact=false)=>language.countdown(at,Date.now(),compact);
   const date=language.resetDate;
-  const label=g=>/argon/i.test(g?.id||'')||/argon/i.test(g?.name||'')?'Gemini (Argon)':/gemini/i.test(g?.name||'')?'Gemini':/claude|gpt/i.test(g?.name||'')?'Claude / GPT':g?.name||t('group');
+  const label=language.quotaGroupLabel;
   const $=id=>root?.getElementById(id);
   const text=(id,value)=>{const e=$(id);if(e&&e.textContent!==String(value))e.textContent=String(value);};
   const attribute=(element,name,value)=>{if(value===null){if(element.hasAttribute(name))element.removeAttribute(name);}else if(element.getAttribute(name)!==String(value))element.setAttribute(name,String(value));};
@@ -594,7 +594,7 @@ module.exports = function installAgPulseInlineWidget() {
       <div class="track" role="progressbar" data-i18n-aria="context" id="context-track"><i id="context-fill"></i></div>
       <dl><div><dt data-i18n="contextModel">Sampled model</dt><dd id="context-model">—</dd></div></dl>
       <div class="heading quota-heading"><span data-i18n="group">Quota group</span><div class="toolbar"><button class="group-trigger" data-i18n-aria="group" aria-haspopup="listbox" aria-expanded="false">Quota ▾</button><div class="group-menu" role="listbox" data-i18n-aria="selectGroup" hidden></div><button class="refresh" data-i18n-aria="refresh" aria-label="Refresh quota" title="Refresh quota"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M12.8 6a5.1 5.1 0 1 0 .1 4M12.8 2.5V6H9.2"/></svg></button></div></div>
-      <div class="quota-details">${['five','week'].map(name=>`<section class="quota-section" data-i18n-aria="${name}" aria-label="${t(name)}"><div class="quota-title"><span>${svg(name)}<span data-i18n="${name}">${t(name)}</span></span><strong id="${name}-balance">—</strong><span class="dim" data-i18n="remaining">remaining</span></div><div class="track" role="progressbar" data-i18n-aria="${name}" id="${name}-track"><i id="${name}-fill"></i></div><dl><div><dt data-i18n="resetIn">Resets in</dt><dd class="reset" id="${name}-countdown">—</dd></div><div><dt data-i18n="resetTime">Reset time (UTC+8)</dt><dd id="${name}-reset">—</dd></div></dl><p class="footnote" id="${name}-note" hidden></p></section>`).join('')}</div>
+      <div class="quota-details">${['five','week'].map(name=>`<section class="quota-section" id="${name}-quota-section" data-i18n-aria="${name}" aria-label="${t(name)}"><div class="quota-title"><span>${svg(name)}<span id="${name}-quota-title" data-i18n="${name}">${t(name)}</span></span><strong id="${name}-balance">—</strong><span class="dim" data-i18n="remaining">remaining</span></div><div class="track" role="progressbar" data-i18n-aria="${name}" id="${name}-track"><i id="${name}-fill"></i></div><dl><div><dt data-i18n="resetIn">Resets in</dt><dd class="reset" id="${name}-countdown">—</dd></div><div><dt data-i18n="resetTime">Reset time (UTC+8)</dt><dd id="${name}-reset">—</dd></div></dl><p class="footnote" id="${name}-note" hidden></p></section>`).join('')}</div>
     </section>`);
     row.insertBefore(node,branch.nextSibling);
     for(const card of root.querySelectorAll('.card')){const note=document.createElement('p');note.className='scope-note';note.dataset.i18n='subagentStats';card.querySelector('.heading').after(note);}
@@ -682,11 +682,11 @@ module.exports = function installAgPulseInlineWidget() {
       text('usage-today',compact(data.usage?.todayTokens));text('usage-month',compact(data.usage?.monthTokens));usageDashboard.update(data.usage);
     }
     if(groupMenu)return;
-    const groups=data.groups||[],model=composer?.model?.getAttribute('aria-label')||composer?.model?.textContent||data.speed?.model||'';
-    group=groups.find(g=>g.id===chosen)||(/argon/i.test(model)?groups.find(g=>/argon/i.test(g.id)):null)||groups.find(g=>/gemini/i.test(model)?(g.id==='gemini'||(/gemini/i.test(g.id)&&!/argon/i.test(g.id))):/claude|gpt/i.test(model)?/3p|claude|gpt/i.test(g.id):false)||groups[0];
+    const groups=data.groups||[],models=[composer?.model?.getAttribute('aria-label'),composer?.model?.textContent,data.speed?.model];
+    group=language.chooseQuotaGroup(groups,models,chosen);
     for(const button of root.querySelectorAll('.group-trigger')){
       if(button.textContent!==`${label(group)} ▾`)button.textContent=`${label(group)} ▾`;
-      const menu=button.parentElement.querySelector('.group-menu'),signature=groups.map(g=>g.id).join('|');
+      const menu=button.parentElement.querySelector('.group-menu'),signature=JSON.stringify(groups.map(g=>[g.id,label(g)]));
       if(menu.dataset.signature!==signature){menu.replaceChildren(...groups.map(g=>{const option=document.createElement('button');option.type='button';option.setAttribute('role','option');option.textContent=label(g);option.dataset.group=g.id;option.addEventListener('click',()=>{chosen=g.id;localSet('ag-pulse-group',chosen);closeGroup();render();menu.parentElement.querySelector('.group-trigger')?.focus({preventScroll:true});});return option;}));menu.dataset.signature=signature;}
       for(const option of menu.children)attribute(option,'aria-selected',option.dataset.group===group?.id);
     }
@@ -770,10 +770,18 @@ module.exports = function installAgPulseInlineWidget() {
     }
     const taskNote=taskUsage?.state==='loading'?t('taskLoading'):taskUsage?.state==='partial'?t(taskUsage.loadedSubagents===0?'taskCurrentOnly':'taskPartial'):'';
     text('cache-note',taskNote);hidden($('cache-note'),!taskNote);
+    const visibleQuotaWindows=language.quotaWindows(group),isArgon=language.quotaGroupKind(group)==='gemini-argon';
+    style($('week-quota-section'),'border-top',visibleQuotaWindows.includes('5h')?'':'0');
+    style($('week-quota-section'),'margin-top',visibleQuotaWindows.includes('5h')?'':'0');
+    style($('week-quota-section'),'padding-top',visibleQuotaWindows.includes('5h')?'':'0');
     for(const [window,name]of[['5h','five'],['weekly','week']]){
-      const b=group?.windows?.[window];text(name,pct(b?.remaining));text(`${name}-balance`,pct(b?.remaining));text(`${name}-reset`,date(b?.resetAt));
-      style($(`${name}-fill`),'width',typeof b?.remaining==='number'?`${b.remaining*100}%`:'0%');style($(`${name}-fill`),'background',b?.remaining<.05?'var(--pulse-danger)':b?.remaining<.2?'var(--pulse-warning)':'');
-      attribute($(`${name}-track`),'aria-valuenow',typeof b?.remaining==='number'?b.remaining*100:null);attribute($(`${name}-track`),'aria-valuemin','0');attribute($(`${name}-track`),'aria-valuemax','100');
+      hidden($(`${name}-quota-section`),!visibleQuotaWindows.includes(window));
+      const heading=t(window==='weekly'&&isArgon?'argonWeek':name);
+      text(`${name}-quota-title`,heading);attribute($(`${name}-quota-section`),'aria-label',heading);attribute($(`${name}-track`),'aria-label',heading);
+      const b=group?.windows?.[window],remaining=language.quotaRemaining(b),balance=b?.disabled?t('unavailableQuota'):pct(remaining);
+      text(name,balance);text(`${name}-balance`,balance);text(`${name}-reset`,date(b?.resetAt));
+      style($(`${name}-fill`),'width',remaining!==null?`${remaining*100}%`:'0%');style($(`${name}-fill`),'background',remaining!==null&&remaining<.05?'var(--pulse-danger)':remaining!==null&&remaining<.2?'var(--pulse-warning)':'');
+      attribute($(`${name}-track`),'aria-valuenow',remaining!==null?remaining*100:null);attribute($(`${name}-track`),'aria-valuemin','0');attribute($(`${name}-track`),'aria-valuemax','100');
       text(`${name}-note`,(composer?.kind==='subagent'?t('accountQuota')+' ':'')+(language.errorMessage(data.error)||(b?.disabled?t('disabledQuota'):!b?.available?t('noQuota'):t('sharedQuota')+' '+t('updated',{time:data.quotaUpdatedAt?new Date(data.quotaUpdatedAt).toLocaleTimeString(language.language,{hour12:false}):'—'}))));
     }
     attribute($('dot'),'class',`dot ${data.connection}`);attribute($('dot'),'title',t(data.connection==='live'?'live':data.connection==='stale'?'stale':'offline'));tick();fit();position();

@@ -20,7 +20,7 @@
   </svg>
   <main class="widget" data-i18n-aria="strip" aria-label="Antigrative Dashboard statistics">
     <header class="widget-header">
-      <div class="brand"><svg class="icon"><use href="#pulse"/></svg><span>Antigrative Dashboard</span><span class="connection-dot" id="connection-dot"></span><span class="version-tag" id="panel-version">v0.8.17</span></div>
+      <div class="brand"><svg class="icon"><use href="#pulse"/></svg><span id="panel-name">Antigrative Dashboard</span><span class="connection-dot" id="connection-dot"></span><span class="version-tag" id="panel-version" hidden></span></div>
       <div class="header-controls">
         <label class="sr-only" for="quota-group"><span data-i18n="group">Quota group</span></label>
         <button class="icon-button" id="language-toggle" type="button" data-i18n-aria="language" aria-label="Language" title="Switch to Chinese">EN</button><select id="quota-group" data-i18n-aria="group" aria-label="Quota group"><option value=""><span data-i18n="loadingQuota">Loading quota…</span></option></select>
@@ -42,9 +42,9 @@
         <span class="chip-primary"><strong id="strip-context">—</strong><span class="unit" data-i18n="panelUsed">used</span></span><span class="chip-secondary" id="strip-context-size">—</span>
       </button>
     </nav>
-    <section class="quota-overview" data-i18n-aria="panelSharedQuota" aria-label="Shared quota">
-      <div class="quota-mini"><div><span>5h</span><strong id="five-summary-balance">—</strong></div><div class="quota-track"><i id="five-summary-fill"></i></div><p><span data-i18n="resetIn">Resets in</span><span id="five-summary-countdown">—</span></p></div>
-      <div class="quota-mini"><div><span data-i18n="weekShort">Wk</span><strong id="week-summary-balance">—</strong></div><div class="quota-track"><i id="week-summary-fill"></i></div><p><span data-i18n="resetIn">Resets in</span><span id="week-summary-countdown">—</span></p></div>
+    <section class="quota-overview" id="quota-overview" data-i18n-aria="panelSharedQuota" aria-label="Quota">
+      <div class="quota-mini" id="five-summary"><div><span>5h</span><strong id="five-summary-balance">—</strong></div><div class="quota-track"><i id="five-summary-fill"></i></div><p><span data-i18n="resetIn">Resets in</span><span id="five-summary-countdown">—</span></p></div>
+      <div class="quota-mini" id="week-summary"><div><span id="week-summary-label" data-i18n="weekShort">Wk</span><strong id="week-summary-balance">—</strong></div><div class="quota-track"><i id="week-summary-fill"></i></div><p><span data-i18n="resetIn">Resets in</span><span id="week-summary-countdown">—</span></p></div>
     </section>
     <section class="card-stage" data-i18n-aria="panelDetails" aria-label="Metric details">
       <article class="detail-card" id="speed-card" role="tabpanel" tabindex="0" aria-labelledby="speed-tab">
@@ -77,7 +77,7 @@
         <p class="card-footnote quota-note" id="five-note">Read from the account API.</p>
       </section>
       <section class="quota-section" id="week-details" role="region" data-i18n-aria="week" aria-label="Weekly quota">
-        <div class="card-heading"><span><svg class="icon"><use href="#calendar"/></svg><span data-i18n="week">Weekly quota</span></span><span class="card-tag group-name">—</span></div>
+        <div class="card-heading"><span><svg class="icon"><use href="#calendar"/></svg><span id="week-quota-title" data-i18n="week">Weekly quota</span></span><span class="card-tag group-name">—</span></div>
         <div class="balance"><strong id="week-balance">—</strong><span><span data-i18n="remaining">remaining</span></span></div>
         <div class="quota-track" role="progressbar" data-i18n-aria="week" aria-label="Weekly quota remaining" id="week-track"><i id="week-fill"></i></div>
         <dl><div><dt><span data-i18n="resetIn">Resets in</span></dt><dd class="reset-countdown" id="week-countdown">—</dd></div><div><dt><span data-i18n="resetTime">Reset time (UTC+8)</span></dt><dd id="week-reset">—</dd></div></dl>

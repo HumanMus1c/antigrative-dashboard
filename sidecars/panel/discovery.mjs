@@ -2,6 +2,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createConnection } from 'node:net';
+import { performance } from 'node:perf_hooks';
 
 const exec = promisify(execFile);
 const languageServer = command => /(?:^|[\/\\])language_server(?:_(?:linux|macos|darwin)(?:_(?:x64|arm64))?)?(?:\.exe)?(?:\s|$)/.test(command);
@@ -77,17 +79,58 @@ function netstatSnapshot(text) {
 
 export function parseNetstat(text) { return netstatSnapshot(text).ports; }
 
-export async function discoverWindowsPorts(pids,{run=exec,expectedPorts=new Map()}={}) {
+// A blank CIM state is not evidence that a socket listens. Test only the
+// known HTTP/CDP target, without sending credentials, HTTP bytes or DNS queries.
+export function probeLoopbackPort(port,{timeoutMs=400,signal,connect=createConnection}={}) {
+  if(!validPort(port)||!Number.isFinite(timeoutMs)||timeoutMs<=0||signal?.aborted)return Promise.resolve(false);
+  return new Promise(resolve=>{
+    let socket,timer,settled=false;
+    const finish=ok=>{
+      if(settled)return;settled=true;clearTimeout(timer);
+      signal?.removeEventListener('abort',aborted);
+      socket?.destroy();resolve(ok);
+    };
+    const aborted=()=>finish(false);
+    // Keep the timer referenced so a caller awaiting only this probe still
+    // receives a result. The socket itself cannot keep the process alive.
+    timer=setTimeout(()=>finish(false),Math.min(400,timeoutMs));
+    signal?.addEventListener('abort',aborted,{once:true});
+    try{
+      socket=connect({host:'127.0.0.1',port,family:4});
+      socket.once('error',()=>finish(false));
+      socket.once('connect',()=>finish(true));
+      socket.once('close',()=>finish(false));
+      socket.unref?.();
+      if(settled)socket.destroy();
+    }catch{finish(false);}
+  });
+}
+
+async function boundedProbe(probe,port,timeoutMs){
+  const controller=new AbortController();let timer;
+  try{
+    return await Promise.race([
+      Promise.resolve().then(()=>probe(port,{timeoutMs,signal:controller.signal})).then(value=>value===true,()=>false),
+      new Promise(resolve=>{timer=setTimeout(()=>{controller.abort();resolve(false);},timeoutMs);}),
+    ]);
+  }finally{clearTimeout(timer);controller.abort();}
+}
+
+export async function discoverWindowsPorts(pids,{run=exec,expectedPorts=new Map(),probe=probeLoopbackPort}={}) {
   const wanted=new Set(pids.filter(validPid));
   if(!wanted.size)return new Map();
+  // Logs may contain many historical port hints. Resolve the preferred target
+  // once per PID, not once for every socket in the bounded CIM response.
+  const preferred=new Map();
+  for(const pid of wanted){for(const port of expectedPorts.get(pid)||[]){if(validPort(port)){preferred.set(pid,port);break;}}}
   const {stdout}=await run('netstat.exe',['-ano','-p','tcp'],{windowsHide:true,timeout:4000,maxBuffer:4194304}).catch(()=>({stdout:''}));
   const snapshot=netstatSnapshot(stdout);
   const ports=new Map([...snapshot.ports].filter(([pid])=>wanted.has(pid)));
   const missing=[...wanted].filter(pid=>{
-    const found=ports.get(pid)||[],expected=[...(expectedPorts.get(pid)||[])].filter(validPort);
+    const found=ports.get(pid)||[],expected=preferred.get(pid);
     // Hints are newest/preferred first. An older HTTP port may have been
     // reused for gRPC; it cannot suppress recovery of the current HTTP port.
-    if(expected.length)return !found.includes(expected[0]);
+    if(expected!==undefined)return !found.includes(expected);
     return !found.length||snapshot.rejectedPids.has(pid);
   });
   if(!missing.length)return ports;
@@ -99,14 +142,32 @@ export async function discoverWindowsPorts(pids,{run=exec,expectedPorts=new Map(
   try {
     const {stdout}=await run('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{windowsHide:true,timeout:8000,maxBuffer:1048576});
     const parsed=stdout.replace(/^\uFEFF/,'').trim();
-    const value=parsed?JSON.parse(parsed):[],allowed=new Set(missing);
+    const value=parsed?JSON.parse(parsed):[],allowed=new Set(missing),uncertain=new Map();
     for(const row of Array.isArray(value)?value:[value]){
       const pid=integer(row?.OwningProcess),port=integer(row?.LocalPort),state=row?.State;
       const listen=state===2||state==='2'||typeof state==='string'&&/^listen$/i.test(state);
-      const tunUnknown=state===0||state==='0'||state==null||state==='';
+      const tunUnknown=state===0||state==='0';
       if(!allowed.has(pid)||!validPort(port)||!localAddress(row?.LocalAddress)
-        ||!unspecifiedAddress(row?.RemoteAddress)||integer(row?.RemotePort)!==0||!(listen||tunUnknown))continue;
+        ||!unspecifiedAddress(row?.RemoteAddress)||integer(row?.RemotePort)!==0)continue;
+      if(!(listen||tunUnknown)){
+        // Only explicit null/empty states qualify. Missing fields, Closed,
+        // Bound and other states remain invalid even if the port is reachable.
+        // Restrict probes to the newest/preferred target, one per PID and four
+        // per discovery pass. Do not scan unrelated or historical ports.
+        if(Object.hasOwn(row,'State')&&(state===null||state==='')&&port===preferred.get(pid)
+          &&uncertain.size<4&&!uncertain.has(pid))uncertain.set(pid,port);
+        continue;
+      }
       if(!ports.has(pid))ports.set(pid,[]);if(!ports.get(pid).includes(port))ports.get(pid).push(port);
+    }
+    const deadline=performance.now()+1500;
+    for(const [pid,port] of uncertain){
+      if(ports.get(pid)?.includes(port))continue;
+      const timeoutMs=Math.min(400,Math.floor(deadline-performance.now()));
+      if(timeoutMs<=0)break;
+      if(await boundedProbe(probe,port,timeoutMs)){
+        if(!ports.has(pid))ports.set(pid,[]);ports.get(pid).push(port);
+      }
     }
   } catch { /* Keep valid native listeners; retry via the client's existing backoff. */ }
   return ports;

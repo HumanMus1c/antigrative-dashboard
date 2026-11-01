@@ -78,7 +78,7 @@ export class MetricsStore {
       const identity = email ? createHash('sha256').update(email).digest('hex') : null;
       if (identity !== this.identity) { this.background?.reset();this.delegated.reset();this.transcripts?.reset(); this.client.resetTrajectories?.(); this.quota = null; this.quotaAt = 0; this.sessions.clear(); this.summaries = []; this.summariesAt = 0;this.clearUsagePersistenceErrors(); }
       this.identity = identity;
-      const response = await this.client.call('RetrieveUserQuotaSummary');
+      const response = await this.client.call('RetrieveUserQuotaSummary',force?{forceRefresh:true}:{});
       if (!this.owned() || epoch !== this.epoch || identity !== this.identity) throw new Error('后台已重新连接，请等待刷新');
       this.quota = quotaMetrics(response);
       this.quotaAt = Date.now();

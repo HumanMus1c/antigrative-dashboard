@@ -7,7 +7,7 @@
 模型选择旁只显示生成速率、缓存和上下文占用；悬停上下文，一并查看上下文、5 小时和周额度详情。<br>
 缩略信息常驻；鼠标悬停，才展开详细统计。
 
-[![Version 0.8.17](https://img.shields.io/badge/version-0.8.17-91adff?style=flat-square&labelColor=252936)](CHANGELOG.md)
+[![Version 0.8.18](https://img.shields.io/badge/version-0.8.18-91adff?style=flat-square&labelColor=252936)](CHANGELOG.md)
 [![Platforms](https://img.shields.io/badge/host-Windows%20%7C%20Linux%20%7C%20macOS-83d8b9?style=flat-square&labelColor=252936)](COMPATIBILITY.md)
 [![Antigravity 2.21.1 / 2.22.0](https://img.shields.io/badge/Antigravity-2.21.1%20%2F%202.22.0-c5a0ff?style=flat-square&labelColor=252936)](COMPATIBILITY.md)
 [![MIT](https://img.shields.io/badge/license-MIT-d4d9e6?style=flat-square&labelColor=252936)](LICENSE)
@@ -16,7 +16,7 @@
 
 </div>
 
-**v0.8.17：** 修复 [#27](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard/issues/27)，兼容 Windows TUN 环境下的本地接口发现，排除伪监听端口；App 与 IDE 共用有超时和重试保护的端口补查。[发布说明](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard/releases/tag/v0.8.17) · [兼容性](COMPATIBILITY.md)。
+**v0.8.18：** 结合 [PR #28](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard/pull/28) 改进 Windows TUN 端口发现、侧栏版本展示，并在 App、IDE 与 CLI 区分 Argon 周额度。[发布说明](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard/releases/tag/v0.8.18) · [兼容性](COMPATIBILITY.md)。
 
 ## 看看效果
 
@@ -64,7 +64,7 @@
 ## Antigravity IDE
 
 **v0.7.0** 新增反重力自己的独立 IDE 适配。下载发布页的
-`antigrative-dashboard-ide-0.8.17.vsix`，在 IDE 扩展页选择「从 VSIX 安装」。
+`antigrative-dashboard-ide-0.8.18.vsix`，在 IDE 扩展页选择「从 VSIX 安装」。
 仅安装 IDE 的用户也可以使用，无需先装桌面 App。
 
 完全退出 IDE 后，使用带

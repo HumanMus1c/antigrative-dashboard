@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {createServer} from 'node:net';
 import {selectIdeServer,ideServer,agyServer,ideRoot,discoverIdeLog,discoverIdeLogPorts,discoverIdeProcesses} from '../discovery.mjs';
 import {validIdeTarget} from '../runtime.mjs';
 import {IdeClient} from '../client.mjs';
@@ -181,16 +182,44 @@ test('Windows fallback preserves ambiguity when two IDE roots own the renderer p
 });
 
 test('Windows fallback excludes non-listening and non-local sockets from renderer ownership',async()=>{
+ const closed=createServer();await new Promise(resolve=>closed.listen(0,'127.0.0.1',resolve));
+ const port=closed.address().port;await new Promise(resolve=>closed.close(resolve));
  for(const invalid of [
-  localSocket(10,9000,{state:'Bound'}),localSocket(10,9000,{state:100}),
-  localSocket(10,9000,{state:1}),localSocket(10,9000,{state:5}),
-  localSocket(10,9000,{state:null}),localSocket(10,9000,{state:''}),
-  localSocket(10,9000,{local:'198.18.0.1'}),localSocket(10,9000,{remote:'198.18.0.20'}),
-  localSocket(10,9000,{remotePort:443}),
+  localSocket(10,port,{state:'Bound'}),localSocket(10,port,{state:100}),
+  localSocket(10,port,{state:1}),localSocket(10,port,{state:5}),
+  localSocket(10,port,{state:null}),localSocket(10,port,{state:''}),
+  localSocket(10,port,{local:'198.18.0.1'}),localSocket(10,port,{remote:'198.18.0.20'}),
+  localSocket(10,port,{remotePort:443}),
  ]){
   const fixture=windowsDiscoveryFixture({fallback:[invalid,localSocket(20,8000)]});
-  await assert.rejects(discoverIdeProcesses(9000,{platform:'win32',run:fixture.run}),/does not belong/);
+  await assert.rejects(discoverIdeProcesses(port,{platform:'win32',run:fixture.run}),/does not belong/);
  }
+});
+
+test('IDE accepts explicit blank-state renderer and API targets only while they actually listen',async t=>{
+ const connections=[];
+ const listen=async()=>{
+  const server=createServer(socket=>{connections.push(socket);socket.on('data',()=>assert.fail('Probe must not send credentials or protocol data'));});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(()=>{for(const socket of connections)socket.destroy();server.close();});
+  return server;
+ };
+ const renderer=await listen(),api=await listen(),debugPort=renderer.address().port,apiPort=api.address().port;
+ const fixture=windowsDiscoveryFixture({fallback:[localSocket(10,debugPort,{state:null}),localSocket(20,apiPort,{state:''})]});
+ const result=await discoverIdeProcesses(debugPort,{platform:'win32',run:fixture.run,expectedApiPorts:[apiPort]});
+ assert.equal(result.rootPid,10);assert.equal(result.ProcessId,20);assert.deepEqual(result.Ports,[apiPort]);assert.equal(fixture.calls.length,3);
+ for(const socket of connections)socket.destroy();
+ await new Promise(resolve=>api.close(resolve));
+ const disconnected=await discoverIdeProcesses(debugPort,{platform:'win32',run:fixture.run,expectedApiPorts:[apiPort]});
+ assert.deepEqual(disconnected.Ports,[],'A reachable renderer cannot prove an unavailable API listener');
+});
+
+test('an omitted State field never supplies IDE renderer ownership even on an open port',async t=>{
+ const server=createServer(socket=>socket.destroy());await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ t.after(()=>server.close());const port=server.address().port;
+ const omitted=localSocket(10,port);delete omitted.State;
+ const fixture=windowsDiscoveryFixture({fallback:[omitted,localSocket(20,8000)]});
+ await assert.rejects(discoverIdeProcesses(port,{platform:'win32',run:fixture.run}),/does not belong/);
 });
 test('macOS/Linux fixtures keep UID and PID lineage rather than newest process',async()=>{
  for(const platform of ['darwin','linux']){
