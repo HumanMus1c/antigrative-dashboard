@@ -76,8 +76,13 @@ export function normalize(payload) {
 
 export function compact(value) {
   if (value === null) return '--';
-  const [scaled, suffix] = value >= 1e6 ? [value / 1e6, 'M'] : value >= 1e3 ? [value / 1e3, 'K'] : [value, ''];
-  return `${Number(scaled.toFixed(suffix ? 1 : 0))}${suffix}`;
+  for (const [base, suffix, nextBase, nextSuffix] of [[1e12, 'T', 0, ''], [1e9, 'B', 1e12, 'T'], [1e6, 'M', 1e9, 'B'], [1e3, 'K', 1e6, 'M']]) {
+    if (value >= base) {
+      const rounded = Number((value / base).toFixed(1));
+      return nextBase && rounded * base >= nextBase ? `1${nextSuffix}` : `${rounded}${suffix}`;
+    }
+  }
+  return String(Math.round(value));
 }
 
 export function percentage(value) {

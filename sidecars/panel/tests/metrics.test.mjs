@@ -8,9 +8,21 @@ const chat = (id, tokens, duration, thinking = '100') => ({ chatModel: { usage: 
 
 test('TPS uses visible response tokens and weights by stream time, excluding TTFT and thinking', () => {
   const data = trajectoryMetrics({ trajectory:{ generatorMetadata:[chat('a',100,'1s'),chat('b',200,'4s')],steps:[] } });
-  assert.equal(data.tps,60); assert.equal(data.latestTps,50);
+  assert.equal(data.tps,60); assert.equal(data.latestTps,50); assert.equal(data.peakTps,100);
+  assert.deepEqual(data.recentTps,[100,50]);
   assert.equal(data.modelSeconds,9); assert.equal(data.ttftSeconds,2);
   assert.equal(data.counts.output,500); assert.equal(data.counts.responseOutput,300);
+});
+test('recentTps caps at last 16 accepted samples and lastActiveAt tracks latest timestamp', () => {
+  const generators = Array.from({length:20},(_,i)=>chat(`m${i}`,100 + i * 10,'2s'));
+  generators[19].chatModel.chatStartMetadata = {createdAt:'2026-10-06T08:10:00Z'};
+  const steps = [{type:'CORTEX_STEP_TYPE_PLANNER_RESPONSE',metadata:{startedAt:'2026-10-06T08:10:02Z',completedAt:'2026-10-06T08:10:05Z'}}];
+  const data = trajectoryMetrics({trajectory:{generatorMetadata:generators,steps}});
+  assert.equal(data.recentTps.length,16);
+  assert.equal(data.recentTps[0],70);
+  assert.equal(data.recentTps[15],145);
+  assert.equal(data.peakTps,145);
+  assert.equal(data.lastActiveAt,'2026-10-06T08:10:05.000Z');
 });
 test('duplicate request metadata and missing/zero duration never inflate speed', () => {
   const a = chat('a',100,'2s');

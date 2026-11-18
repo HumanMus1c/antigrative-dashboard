@@ -29,9 +29,12 @@ test('English is the first-use default, regardless of browser/host language',()=
 test('saved Chinese selection is restored and toggling translates text and countdowns immediately',()=>{
   const language=create('zh-CN'),now=Date.parse('2026-10-06T08:00:00Z');
   assert.equal(language.t('cacheTitle'),'Token 用量');
-  assert.equal(language.countdown('2026-10-08T10:00:00Z',now),'2天 02:00:00');
+  assert.equal(language.countdown('2026-10-08T10:00:00Z',now),'2d 2h 0m');
   const saved=language.toggle();assert.equal(saved,'en');assert.equal(create(saved).t('cacheTitle'),'Token usage');
-  assert.equal(language.countdown('2026-10-08T10:00:00Z',now),'2d 02:00:00');
+  assert.equal(language.countdown('2026-10-08T10:00:00Z',now),'2d 2h 0m');
+  assert.equal(language.countdown('2026-10-06T09:05:30Z',now),'1h 5m');
+  assert.equal(language.countdown('2026-10-06T08:45:00Z',now),'45m');
+  assert.equal(language.countdown('2026-10-06T08:00:30Z',now),'<1m');
   assert.equal(language.t('sample',{rounds:2,steps:6,requests:3}),'2 turns · 6 steps · 3 samples');
   language.toggle();assert.equal(language.t('sample',{rounds:2,steps:6,requests:3}),'2轮 6步 · 3 次采样');
 });
@@ -59,7 +62,7 @@ test('Traditional Chinese (zh-TW) provides accurate localized terminology and to
   assert.equal(language.t('panelSharedQuota'),'配額');
   assert.equal(language.t('argonWeek'),'Argon 每週配額');
   assert.equal(language.t('sample',{rounds:2,steps:6,requests:3}),'2 輪 6 步 · 3 次取樣');
-  assert.equal(language.countdown('2026-10-08T10:00:00Z',now),'2天 02:00:00');
+  assert.equal(language.countdown('2026-10-08T10:00:00Z',now),'2d 2h 0m');
   assert.equal(language.elapsed(90),'1 分 30 秒');
   assert.equal(language.errorMessage('请先打开 Antigravity'),'請先開啟 Antigravity');
   assert.equal(language.errorMessage('未找到 Antigravity 桌面后台'),'找不到 Antigravity 桌面背景程式');

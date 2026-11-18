@@ -152,13 +152,37 @@ export function trajectoryMetrics(response, storage = null) {
   const excludedTiming = samples.filter(sample=>sample.status === 'unreliable').length;
   const rateWarnings = samples.filter(sample=>sample.status === 'ok' && (sample.duration < 1 || sample.outlier)).length;
   const timingReasons = Object.fromEntries(RATE_REASONS.map(reason=>[reason,samples.filter(sample=>sample.reasons.includes(reason)).length]));
-  const streamingSeconds = accepted.reduce((sum, s) => sum + s.duration, 0);
-  const sampledTokens = accepted.reduce((sum, s) => sum + s.responseTokens, 0);
-  const basisSamples = accepted.length ? accepted : samples;
+  let acceptedCount = 0, streamingSeconds = 0, sampledTokens = 0, peakTps = null;
+  const recentTps = [];
+  for (const s of accepted) {
+    acceptedCount++;
+    streamingSeconds += s.duration;
+    sampledTokens += s.responseTokens;
+    if (typeof s.tps === 'number' && Number.isFinite(s.tps)) {
+      if (peakTps === null || s.tps > peakTps) peakTps = s.tps;
+      if (recentTps.length === 16) recentTps.shift();
+      recentTps.push(Math.round(s.tps * 10) / 10);
+    }
+  }
+  const basisSamples = acceptedCount ? accepted : samples;
   const tools = steps.filter(s => /SEARCH_WEB|BROWSE|RUN_COMMAND|COMMAND|READ|WRITE|EDIT|CODE_ACTION|TOOL|MCP|LIST|GREP|VIEW|FIND|TERMINAL/i.test(String(s.type || '')) || s.metadata?.toolCall);
   const toolSeconds = storage ? storage.toolSeconds() : unionSeconds(tools.map(s => [Date.parse(s.metadata.startedAt || s.metadata.createdAt), Date.parse(s.metadata.completedAt)]));
   const latest = samples.at(-1) || null;
   const lastChat = storage ? storage.lastChat() : [...generators].reverse().find(g => g.chatModel)?.chatModel;
+  let lastActiveMs = NaN;
+  const considerTime = value => {
+    if (typeof value !== 'string') return;
+    const ms = Date.parse(value);
+    if (Number.isFinite(ms) && (!Number.isFinite(lastActiveMs) || ms > lastActiveMs)) lastActiveMs = ms;
+  };
+  considerTime(lastChat?.chatStartMetadata?.createdAt);
+  for (let i = steps.length - 1, stop = Math.max(0, steps.length - 8); i >= stop; i--) {
+    const meta = steps[i]?.metadata;
+    considerTime(meta?.completedAt);
+    considerTime(meta?.startedAt);
+    considerTime(meta?.createdAt);
+  }
+  const lastActiveAt = Number.isFinite(lastActiveMs) ? new Date(lastActiveMs).toISOString() : null;
   const inputParts=[tokens.uncachedTokens,tokens.cachedTokens,tokens.cacheWriteTokens];
   tokens.inputTokens = tokenCount(inputParts.reduce((sum,value)=>sum+(value??0),0));
   const totalTokens=tokenCount((tokens.inputTokens??0)+(tokens.outputTokens??0));
@@ -166,11 +190,12 @@ export function trajectoryMetrics(response, storage = null) {
     source: 'Antigravity request metadata', status: response.status || null,
     conversationId: trajectory.cascadeId || null,
     steps: Number(response.numTotalSteps ?? steps.length), rounds: steps.filter(s => /USER_INPUT/.test(String(s.type))).length,
-    requests: ids.size, measuredRequests: accepted.length, missingTiming, excludedTiming, rateWarnings, timingReasons, rateVersion: RATE_VERSION, counts,
+    requests: ids.size, measuredRequests: acceptedCount, missingTiming, excludedTiming, rateWarnings, timingReasons, rateVersion: RATE_VERSION, counts,
     tokens:{...tokens,totalTokens,
       complete:tokens.missingInputRequests===0&&tokens.missingOutputRequests===0&&inputParts.every(value=>value!==null)&&tokens.outputTokens!==null&&totalTokens!==null},
     cache:{...cache,totalTokens:cache.inputTokens+cache.outputTokens,hitRate:cache.inputTokens>0?cache.cachedTokens/cache.inputTokens:null,complete:cache.missingRequests===0},
     tps: streamingSeconds > 0 ? sampledTokens / streamingSeconds : null, latestTps: latest?.status === 'ok' ? latest.tps : null,
+    peakTps, recentTps, lastActiveAt,
     latestRateStatus: latest?.status ?? 'missing',
     rateBasis: basisSamples.length && basisSamples.every(s => s.basis === 'response') ? 'response' : 'all-output',
     streamingSeconds, modelSeconds, toolSeconds, ttftSeconds: ttftSamples ? ttftSeconds / ttftSamples : null,

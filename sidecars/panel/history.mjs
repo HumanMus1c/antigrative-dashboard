@@ -10,7 +10,7 @@ import {normalizeConversationId} from './delegation.mjs';
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SCOPE = /^[0-9a-f]{64}$/;
-const numeric = ['steps','rounds','requests','measuredRequests','missingTiming','tps','latestTps','streamingSeconds','modelSeconds','toolSeconds','ttftSeconds','excludedTiming','rateWarnings'];
+const numeric = ['steps','rounds','requests','measuredRequests','missingTiming','tps','latestTps','peakTps','streamingSeconds','modelSeconds','toolSeconds','ttftSeconds','excludedTiming','rateWarnings'];
 const counts = ['input','output','responseOutput','thinkingOutput','cacheRead','cacheWrite'];
 const cache = ['inputTokens','cachedTokens','cacheWriteTokens','uncachedTokens','outputTokens','measuredRequests','missingRequests','totalTokens','hitRate'];
 const tokens = ['inputTokens','cachedTokens','cacheWriteTokens','uncachedTokens','outputTokens','measuredRequests','inputRequests','outputRequests','missingInputRequests','missingOutputRequests','totalTokens'];
@@ -71,7 +71,8 @@ export function safeMetrics(value, conversationId) {
       complete:false});
   }
   for (const key of ['speedRestoredFromHistory','cacheRestoredFromHistory']) result[key] = value[key] === true;
-  for (const key of ['speedSavedAt','cacheSavedAt']) result[key] = typeof value[key] === 'string' && Number.isFinite(Date.parse(value[key])) ? new Date(value[key]).toISOString() : null;
+  for (const key of ['speedSavedAt','cacheSavedAt','lastActiveAt']) result[key] = typeof value[key] === 'string' && Number.isFinite(Date.parse(value[key])) ? new Date(value[key]).toISOString() : null;
+  result.recentTps = Array.isArray(value.recentTps) ? value.recentTps.filter(v => number(v) && v > 0).slice(-16).map(v => Math.round(v * 10) / 10) : [];
   result.rateBasis = value.rateBasis === 'response' ? 'response' : 'all-output';
   result.model = typeof value.model === 'string' ? value.model.slice(0,256) : null;
   result.status = typeof value.status === 'string' && /^[A-Z0-9_]+$/.test(value.status) ? value.status : null;
@@ -94,7 +95,8 @@ export function safeMetrics(value, conversationId) {
   if (result.rateVersion !== RATE_VERSION) {
     // Old aggregates cannot be repaired without the raw trajectory. Retain
     // usage/context, but never present a legacy unvalidated rate as trustworthy.
-    result.tps = result.latestTps = result.streamingSeconds = null;
+    result.tps = result.latestTps = result.peakTps = result.streamingSeconds = null;
+    result.recentTps = [];
     result.measuredRequests = 0;
     result.latestRateStatus = 'legacy';
     result.latestShortSample = false;

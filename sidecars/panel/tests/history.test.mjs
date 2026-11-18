@@ -103,9 +103,9 @@ test('legacy rates are masked offline, then fully recalculated without dropping 
   delete legacy.rateVersion;delete legacy.latestRateStatus;
   await history.save(a,id,legacy);
   const offline=await new MetricsStore(client(async()=>{throw Error('offline');}),{history}).snapshot({conversationId:id});
-  assert.equal(offline.speed.tps,null);assert.equal(offline.speed.latestRateStatus,'legacy');assert.equal(offline.speed.counts.output,17876);
+  assert.equal(offline.speed.tps,null);assert.equal(offline.speed.peakTps,null);assert.deepEqual(offline.speed.recentTps,[]);assert.equal(offline.speed.latestRateStatus,'legacy');assert.equal(offline.speed.counts.output,17876);
   const fixed=await new MetricsStore(client(async()=>good),{history}).snapshot({conversationId:id});
-  assert.equal(fixed.speed.tps,50);assert.equal(fixed.speed.excludedTiming,1);assert.equal(fixed.speed.measuredRequests,1);
+  assert.equal(fixed.speed.tps,50);assert.equal(fixed.speed.peakTps,50);assert.deepEqual(fixed.speed.recentTps,[50]);assert.equal(fixed.speed.excludedTiming,1);assert.equal(fixed.speed.measuredRequests,1);
   assert.equal(fixed.speed.cache.outputTokens,17876);assert.equal(fixed.speed.restoredFromHistory,false);
   const saved=await history.load(a,id);assert.equal(saved.metrics.rateVersion,2);assert.equal(saved.metrics.tps,50);
 });

@@ -35,13 +35,13 @@ test('guide dismissal survives a fresh backend without selecting a language; old
 });
 
 test('Chinese and English survive a new backend and a renderer with empty origin storage',async t=>{
-  const {file,store}=await fixture(t);assert.deepEqual(await store.get(),{language:null,languageGuideDismissed:false,usageGuideDismissed:false,revision:0});
+  const {file,store}=await fixture(t);assert.deepEqual(await store.get(),{language:null,languageGuideDismissed:false,usageGuideDismissed:false,speedStyle:null,revision:0});
   const first=create(null),controller=connect(first,store);await controller.ready;await controller.toggle();
   assert.equal(first.language,'zh-CN');controller.dispose();
   const afterRestart=create(null),restored=connect(afterRestart,new PreferencesStore({file}));await restored.ready;
   assert.equal(afterRestart.language,'zh-CN');await restored.toggle();restored.dispose();
   const again=create(null);await connect(again,new PreferencesStore({file})).ready;assert.equal(again.language,'en');
-  const json=JSON.parse(await readFile(file,'utf8'));assert.deepEqual(Object.keys(json).sort(),['language','languageGuideDismissed','revision','schema','usageGuideDismissed']);
+  const json=JSON.parse(await readFile(file,'utf8'));assert.deepEqual(Object.keys(json).sort(),['language','languageGuideDismissed','revision','schema','speedStyle','usageGuideDismissed']);
 });
 
 test('usage onboarding completion persists independently of language and language onboarding',async t=>{
@@ -52,6 +52,45 @@ test('usage onboarding completion persists independently of language and languag
   const saved=await new PreferencesStore({file}).get();assert.equal(saved.usageGuideDismissed,true);assert.equal(saved.languageGuideDismissed,true);assert.equal(saved.language,'en');
   await assert.rejects(store.set({usageGuideDismissed:false}));await assert.rejects(store.set({usageGuideDismissed:'true'}));
   const fresh=await fixture(t);await fresh.store.set({usageGuideDismissed:true});const first=await fresh.store.get();assert.equal(first.language,null);assert.equal(first.languageGuideDismissed,false);
+});
+
+test('speed card style persists independently, defaults to minimal and rejects unknown styles',async t=>{
+  const {file,store}=await fixture(t);
+  await writeFile(file,JSON.stringify({schema:1,language:'zh-CN',languageGuideDismissed:true,revision:1}));
+  const legacy=await store.get();assert.equal(legacy.speedStyle,null,'Older files have no style; renderers treat that as minimal');
+  const language=create(null);assert.equal(language.normalizeSpeedStyle(legacy.speedStyle),'minimal');assert.equal(language.normalizeSpeedStyle('neon'),'minimal');
+  await store.set({speedStyle:'cat'});await store.set({language:'en'});
+  let saved=await new PreferencesStore({file}).get();assert.equal(saved.speedStyle,'cat');assert.equal(saved.language,'en');assert.equal(saved.languageGuideDismissed,true);
+  await store.set({speedStyle:'minimal'});saved=await store.get();assert.equal(saved.speedStyle,'minimal');assert.equal(saved.language,'en');
+  for(const input of [{speedStyle:'neon'},{speedStyle:null},{speedStyle:''},{speedStyle:'cat',theme:'x'}])await assert.rejects(store.set(input));
+  await writeFile(file,JSON.stringify({schema:1,language:'en',speedStyle:'<script>',revision:3}));assert.equal((await store.get()).speedStyle,null,'Unknown stored styles are ignored, not trusted');
+});
+
+test('speed style controller saves choices, ignores stale polls and keeps a failed choice visible',async()=>{
+  let fail=false,revision=1;const cached=[],changes=[];const language=create(null);
+  const controller=language.connectSpeedStyle({initial:'cat',cache:value=>cached.push(value),changed:value=>changes.push(value),write:async input=>{
+    await new Promise(resolve=>setTimeout(resolve,2));if(fail)throw new Error('Disk unavailable');return {language:null,speedStyle:input.speedStyle,revision:++revision};
+  }});
+  assert.equal(controller.style,'cat','A cached choice paints before the first preference read');
+  controller.sync({language:null,speedStyle:null,revision:1});assert.equal(controller.style,'minimal');
+  await controller.choose('cat');assert.equal(controller.style,'cat');assert.equal(controller.error,false);
+  controller.sync({language:null,speedStyle:'minimal',revision:1});assert.equal(controller.style,'cat','A stale poll cannot undo a newer choice');
+  fail=true;await controller.choose('minimal');assert.equal(controller.style,'minimal');assert.equal(controller.error,true);
+  controller.sync({language:null,speedStyle:'cat',revision:99});assert.equal(controller.style,'minimal','An unsaved choice stays visible with its warning');
+  fail=false;await controller.choose('minimal');assert.equal(controller.error,false);
+  await controller.choose('neon');assert.equal(controller.style,'minimal');
+  assert.deepEqual(cached.at(-1),'minimal');assert.ok(changes.length>=4);controller.dispose();
+});
+
+test('minimal sparkline geometry is right-aligned, bounded and ends on the latest sample',()=>{
+  const language=create(null);
+  assert.equal(language.minimalTrail([],{width:140,height:54}),null);
+  const shape=language.minimalTrail([10,40,20,30],{width:140,height:54,top:6,bottom:2,right:4});
+  assert.match(shape.line,/^M[\d.]+ [\d.]+(L[\d.]+ [\d.]+){3}$/);assert.ok(shape.area.startsWith(shape.line)&&shape.area.endsWith('Z'));
+  assert.equal(shape.end[0],136);
+  const ys=[...shape.line.matchAll(/[ML]([\d.]+) ([\d.]+)/g)].map(m=>Number(m[2]));
+  assert.ok(ys.every(y=>y>=6&&y<=52));assert.ok(ys[1]<ys[0],'Higher speed is drawn higher');assert.equal(shape.end[1],ys.at(-1));
+  const single=language.minimalTrail([25],{width:120,height:44});assert.equal(single.line,'M105.5 22.2L116 22.2','A single sample draws a short flat segment ending at the latest point');
 });
 
 test('existing browser choice migrates once; durable preference overrides stale browser storage',async t=>{
@@ -99,11 +138,19 @@ test('rapid renderer toggles serialize writes; failed save is visible and can be
   fail=false;await controller.choose('en');assert.equal(controller.error,false);assert.equal(saved,'en');
 });
 
-test('usageScope persists independently and validates choices',async t=>{
+test('usageScope persists independently, defaults cleanly and validates choices',async t=>{
   const {file,store}=await fixture(t);
+  const language=create(null);assert.equal(language.normalizeUsageScope(undefined),'local');assert.equal(language.normalizeUsageScope('account'),'account');assert.equal(language.normalizeUsageScope('bad'),'local');
   await store.set({usageScope:'account'});
   let saved=await new PreferencesStore({file}).get();assert.equal(saved.usageScope,'account');assert.equal(saved.language,null);
   await store.set({language:'zh-CN'});await store.set({usageScope:'local'});
   saved=await new PreferencesStore({file}).get();assert.equal(saved.usageScope,'local');assert.equal(saved.language,'zh-CN');
   for(const bad of [{usageScope:'all'},{usageScope:null},{usageScope:''},{usageScope:'local',extra:'x'}])await assert.rejects(store.set(bad));
+  let revision=1,fail=false;
+  const scopeCtrl=language.connectUsageScope({initial:'account',write:async input=>{if(fail)throw Error('io');return {language:null,usageScope:input.usageScope,revision:++revision};}});
+  assert.equal(scopeCtrl.scope,'account');
+  await scopeCtrl.choose('local');assert.equal(scopeCtrl.scope,'local');assert.equal(scopeCtrl.error,false);
+  scopeCtrl.sync({language:null,usageScope:'account',revision:1});assert.equal(scopeCtrl.scope,'local');
+  fail=true;await scopeCtrl.choose('account');assert.equal(scopeCtrl.scope,'account');assert.equal(scopeCtrl.error,true);
+  scopeCtrl.dispose();
 });

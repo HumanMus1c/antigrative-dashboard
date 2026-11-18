@@ -13,8 +13,14 @@ test('quota labels and selection agree across IDs, display names and order in al
    for(const groups of [[gemini,group,third],[group,third,gemini]]){
     assert.equal(ui.chooseQuotaGroup(groups,'Gemini 4 Argon').id,group.id);
     assert.equal(ui.chooseQuotaGroup(groups,'Gemini Flash').id,'gemini');
+    assert.equal(ui.chooseQuotaGroup(groups,'Gemini 4 Hydrogen (XHigh)').id,'gemini');
+    assert.equal(ui.chooseQuotaGroup(groups,'Orchestrator (Carbon)').id,'gemini');
     assert.equal(ui.chooseQuotaGroup(groups,'GPT-5').id,'3p');
     assert.equal(ui.chooseQuotaGroup(groups,'Claude Sonnet').id,'3p');
+    assert.equal(ui.chooseQuotaGroup(groups,'Claude Sonnet 4.5').id,'3p');
+    assert.equal(ui.chooseQuotaGroup(groups,'Opus 4.6').id,'3p');
+    assert.equal(ui.chooseQuotaGroup(groups,'Haiku 4.5').id,'3p');
+    assert.equal(ui.chooseQuotaGroup(groups,'o3').id,'3p');
    }
   }
  }
@@ -66,4 +72,41 @@ test('disabled and unknown quota never become spendable balances; exhausted rema
  assert.equal(ui.quotaRemaining({available:true,remaining:0}),0);
  assert.equal(ui.quotaRemaining({available:true,disabled:true,remaining:1}),null);
  for(const remaining of [null,undefined,'1',NaN,-1,2])assert.equal(ui.quotaRemaining({available:true,remaining}),null);
+});
+
+test('quotaForecast and groupQuotaPace estimate depletion, pace deltas and warm-up across languages',()=>{
+ const now=Date.UTC(2026,10,15,8,0,0),weekMs=604800000,fiveMs=18000000;
+ for(const locale of ['en','zh-CN','zh-TW']){
+  const ui=createI18n(locale);
+  const overspeed={available:true,remaining:.638,resetAt:new Date(now+Math.round(weekMs*.702)).toISOString()};
+  const fast=ui.quotaForecast(overspeed,'weekly',now);
+  assert.equal(fast.pace,'fast');assert.ok(Math.abs(fast.paceDelta-(-.064))<1e-3);
+  assert.equal(fast.forecastReady,true);assert.equal(fast.willExhaust,true);
+  assert.equal(fast.projectedUsed,1);assert.equal(fast.projectedRemaining,0);assert.ok(fast.exhaustInMs>0);
+  assert.equal(fast.outlook,'exhaust');
+  assert.ok(Math.abs(fast.earlyByMs-(Math.round(weekMs*.702)-fast.exhaustInMs))<1000,'earlyByMs is the gap between depletion and reset');
+  const comfy={available:true,remaining:.734,resetAt:new Date(now+Math.round(fiveMs*.4)).toISOString()};
+  const slow=ui.quotaForecast(comfy,'5h',now);
+  assert.equal(slow.pace,'slow');assert.equal(slow.forecastReady,true);assert.equal(slow.willExhaust,false);
+  assert.ok(Math.abs(slow.projectedUsed-.266/.6)<1e-3);assert.ok(Math.abs(slow.projectedRemaining-(1-.266/.6))<1e-3);
+  assert.equal(slow.outlook,'ok');assert.equal(slow.earlyByMs,null);
+  const linear={available:true,remaining:.5,resetAt:new Date(now+Math.round(fiveMs*.5)).toISOString()};
+  const steady=ui.quotaForecast(linear,'5h',now);
+  assert.equal(steady.pace,'steady');assert.ok(Math.abs(steady.projectedUsed-1)<1e-3);assert.equal(steady.willExhaust,false);
+  assert.equal(steady.outlook,'tight','Reaching about zero exactly at reset is tight, not comfortable');
+  const warmup={available:true,remaining:.99,resetAt:new Date(now+weekMs-120000).toISOString()};
+  const warm=ui.quotaForecast(warmup,'weekly',now);
+  assert.equal(warm.warmingUp,true);assert.equal(warm.forecastReady,false);assert.equal(warm.outlook,null);
+  const idle={available:true,remaining:1,resetAt:new Date(now+fiveMs).toISOString()};
+  assert.equal(ui.quotaForecast(idle,'5h',now).pace,'idle');assert.equal(ui.quotaForecast(idle,'5h',now).outlook,'idle');
+  assert.equal(ui.quotaForecast({available:true,remaining:.4,resetAt:new Date(now-1000).toISOString()},'5h',now),null);
+  assert.equal(ui.quotaForecast({available:true,disabled:true,remaining:.4,resetAt:new Date(now+1000).toISOString()},'5h',now),null);
+  const pace=ui.groupQuotaPace({id:'gemini',name:'Gemini',windows:{'5h':comfy,weekly:overspeed}},now);
+  assert.equal(pace.pace,'exhaust');assert.equal(pace.window,'weekly');
+  assert.equal(pace.label,ui.t('outlookExhaust'));
+  assert.equal(ui.groupQuotaPace({id:'gemini',name:'Gemini',windows:{'5h':comfy}},now).pace,'ok');
+  assert.equal(ui.groupQuotaPace({id:'gemini',name:'Gemini',windows:{'5h':linear,weekly:warmup}},now).pace,'tight');
+  assert.equal(ui.groupQuotaPace({id:'gemini',name:'Gemini',windows:{weekly:warmup}},now),null,'A window still warming up has no conclusion yet');
+  assert.equal(ui.groupQuotaPace({id:'gemini',name:'Gemini',windows:{'5h':idle}},now).pace,'idle');
+ }
 });
