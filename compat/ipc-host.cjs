@@ -15,13 +15,13 @@ module.exports = function installAgPulseIpc(electron, authorities) {
     try {
       const origin=new URL(event.senderFrame?.url||event.sender.getURL());
       if(!['127.0.0.1','localhost','[::1]'].includes(origin.hostname)||!['http:','https:'].includes(origin.protocol))throw new Error('Invalid preference origin');
-      if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>key!=='language'))throw new Error('Invalid preference input');
+      if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!['language','usageScope','speedStyle'].includes(key)))throw new Error('Invalid preference input');
       if(!preferenceStore){
         const file=path.join(os.homedir(),'.gemini','config','plugins','antigravity-pulse','compat','preferences.mjs');
         preferenceStore=import(require('node:url').pathToFileURL(file).href).then(({PreferencesStore})=>new PreferencesStore());
       }
       const store=await preferenceStore;
-      return Object.hasOwn(input,'language')?await store.set(input):await store.get();
+      return Object.keys(input).length?await store.set(input):await store.get();
     }catch{preferenceStore=null;return {error:'Language preference could not be saved or read'};}
   });
   electron.ipcMain.on('ag-pulse:diagnostic',(event,state={})=>{
@@ -63,6 +63,9 @@ module.exports = function installAgPulseIpc(electron, authorities) {
     url.hostname='127.0.0.1'; url.pathname='/api/metrics';url.search='';
     if(input.conversationId)url.searchParams.set('conversationId',input.conversationId);
     if(input.force===true)url.searchParams.set('force','1');
+    if(input.quotaRefresh===true)url.searchParams.set('quotaRefresh','1');
+    if(input.usageOnly===true)url.searchParams.set('usageOnly','1');
+    if(input.usageScope==='local'||input.usageScope==='account')url.searchParams.set('usageScope',input.usageScope);
     return await new Promise(resolve=>{
       const req=http.get(url,res=>{
         let body='';res.setEncoding('utf8');

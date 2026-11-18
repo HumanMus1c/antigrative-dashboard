@@ -37,8 +37,13 @@ test('binding requests allow historical sync only with an explicit boolean true'
   assert.deepEqual(validatedInput({ conversationId: null, force: 1, apiKey: 'must-not-forward' }), { conversationId: null, force: false });
   assert.throws(() => validatedInput({ conversationId: "');fetch('https://example.com')" }));
   assert.throws(() => validatedInput([]));
-  assert.deepEqual(validatedInput({conversationId:null,force:true,usageSync:true,extra:'discard'}),{conversationId:null,force:true,usageSync:true});
+  assert.deepEqual(validatedInput({conversationId:null,force:true,usageSync:true,quotaRefresh:true,extra:'discard'}),{conversationId:null,force:true,usageSync:true,quotaRefresh:true});
+  assert.deepEqual(validatedInput({conversationId:null,composerModel:'  Claude\nSonnet\t4.5  '}),{conversationId:null,force:false,composerModel:'Claude Sonnet 4.5'});
+  assert.deepEqual(validatedInput({conversationId:null,composerModel:'   \u0000\n'}),{conversationId:null,force:false});
   for(const usageSync of [false,1,'true',{},null])assert.deepEqual(validatedInput({conversationId:null,usageSync}),{conversationId:null,force:false});
+  for(const quotaRefresh of [false,1,'true',{},null])assert.deepEqual(validatedInput({conversationId:null,quotaRefresh}),{conversationId:null,force:false});
+  assert.deepEqual(validatedInput({conversationId:null,usageOnly:true,usageScope:'account'}),{conversationId:null,force:false,usageOnly:true,usageScope:'account'});
+  assert.deepEqual(validatedInput({conversationId:null,usageOnly:'1',usageScope:'invalid'}),{conversationId:null,force:false});
 });
 
 test('app update replaces the renderer port and reconnects without archive edits', async () => {
@@ -276,4 +281,21 @@ test('takeover during attachment removes old preload and leaves no retained conn
   assert.ok(connections[0].calls.some(call=>call.method==='Page.removeScriptToEvaluateOnNewDocument'));
   assert.equal(connections[0].calls.some(call=>call.method==='Runtime.evaluate'),false);
   await ui.stop();
+});
+
+test('runtime bridge samples host fonts into rendererTheme, allows usageScope and clears on detachAll',async()=>{
+  const {ui,connections}=fixture();
+  ui.preferences={get:async()=>({language:'en',usageScope:'local',revision:1}),set:async v=>({language:'en',...v,revision:2})};
+  await ui.tick();const c=connections[0],orig=c.command.bind(c);
+  c.command=async(method,params={})=>{
+    const res=await orig(method,params);
+    if(method==='Runtime.evaluate'&&params.returnByValue)return {result:{value:{mounted:true,installed:true,bridge:true,fontFamily:'"Inter", sans-serif',monoFontFamily:'JetBrains Mono'}}};
+    return res;
+  };
+  await ui.tick();
+  assert.deepEqual(ui.rendererTheme,{fontFamily:'"Inter", sans-serif',monoFontFamily:'JetBrains Mono'});
+  await ui.event(c,{method:'Runtime.bindingCalled',params:{name:ui.binding,executionContextId:7,payload:JSON.stringify({id:20,type:'preferences',input:{usageScope:'account'}})}});
+  assert.ok(c.calls.some(call=>call.params.expression?.includes('"usageScope":"account"')));
+  await ui.stop();
+  assert.deepEqual(ui.rendererTheme,{});
 });

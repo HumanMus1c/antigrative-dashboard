@@ -34,11 +34,20 @@ store.onTrajectory=async(scope,id,raw,options={})=>{
 store.onBackgroundResult=(scope,id,file,options)=>usage.ingestDisk(scope,id,file,options);
 const preferences=new PreferencesStore();
 const updater=new AppUpdater({pluginDir:join(HERE,'..','..'),dataDir:paths.data});
+let liveComposerModel = null;
 const metrics = async input => {
   if(ownership&&!await ownership.isOwner())throw Error('Sidecar ownership changed');
   runtimeSettings();
+  const prefs=await preferences.snapshot();
+  const hostTheme=await readHostTheme(),liveTheme=integration.rendererTheme;
+  const theme=(liveTheme?.fontFamily||liveTheme?.monoFontFamily)?{...liveTheme,...hostTheme}:hostTheme;
+  if(input?.usageOnly===true){
+    if(!store.serverPid&&!store.identity){try{await store.snapshot({conversationId:null,force:false,selectLatest:false});}catch{}}
+    const requestedScope=(input.usageScope==='local'||input.usageScope==='account')?input.usageScope:(prefs?.usageScope||'local');
+    return {connection:store.quota?'live':'stale',groups:store.quota||[],speed:null,usage:await usage.snapshot({sync:false,scope:requestedScope,groups:store.quota}),preferences:prefs,theme,integration:integration.health};
+  }
   const base=await store.snapshot(input);if(input?.usageSync===true)void usage.sync(true);
-  return {...base,usage:await usage.snapshot({sync:input?.usageSync===true}),preferences:await preferences.snapshot(),theme:await readHostTheme(),integration:integration.health};
+  return {...base,...(liveComposerModel?{composerModel:liveComposerModel}:{}),usage:await usage.snapshot({sync:input?.usageSync===true,scope:prefs?.usageScope||'local',groups:base.groups}),preferences:prefs,theme,integration:integration.health};
 };
 const usageSource=()=>{const s=readFileSync(join(HERE,'..','..','compat','usage-ui.cjs'),'utf8');return `window.__agPulseUsageFactory=(${s.slice(s.indexOf('module.exports = ')+17).trim().replace(/;$/,'')});`;};
 const updateSource=()=>{const s=readFileSync(join(HERE,'..','..','compat','update-ui.cjs'),'utf8');return `window.__agPulseUpdateFactory=(${s.slice(s.indexOf('module.exports = ')+17).trim().replace(/;$/,'')});`;};
@@ -62,7 +71,10 @@ const runtimeSettings = () => {
 const integration = new RuntimeUi({
   // Composer identity is authoritative. Unknown/new inline inputs request quota
   // only; SDK/HTTP panels keep the store's automatic most-recent selection.
-  snapshot: input => metrics({...input,selectLatest:false}),
+  snapshot: input => {
+    if (input && Object.hasOwn(input, 'composerModel')) liveComposerModel = input.composerModel || null;
+    return metrics({...input,selectLatest:false});
+  },
   preferences,
   updater,
   owner:ownership?.token,owns:()=>ownership?ownership.isOwner():true,
@@ -80,7 +92,7 @@ if (process.env.ANTIGRAVITY_SIDECAR_WEB_PORT) {
   app.page('/i18n.js',i18nModule);
   app.page('/theme.js',themeModule);
   app.api('/theme.css',()=>new Response(themeCss(),{contentType:'text/css'}),'GET');
-  app.api('/api/metrics', data => metrics({ conversationId: data.conversationId || null, force: data.force === true || data.force === '1' }), 'GET');
+  app.api('/api/metrics', data => metrics({ conversationId: data.conversationId || null, force: data.force === true || data.force === '1', quotaRefresh: data.quotaRefresh === true || data.quotaRefresh === '1', ...(data.usageOnly === true || data.usageOnly === '1' ? { usageOnly: true } : {}), ...(data.usageScope === 'local' || data.usageScope === 'account' ? { usageScope: data.usageScope } : {}) }), 'GET');
   app.api('/api/integration', () => integration.health, 'GET');
   app.api('/api/preferences',()=>preferences.snapshot(),'GET');
   app.api('/api/preferences',async data=>{try{return await preferences.set(data);}catch{return new Response(JSON.stringify({error:'Language preference could not be saved'}),{status:400,contentType:'application/json'});}},'POST');
@@ -122,7 +134,7 @@ if (process.env.ANTIGRAVITY_SIDECAR_WEB_PORT) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     if (url.pathname === '/api/metrics') {
       if (req.headers.origin && req.headers.origin !== `http://${host}`) { res.writeHead(403); res.end(); return; }
-      try { res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(await metrics({ conversationId: url.searchParams.get('conversationId'), force: url.searchParams.get('force') === '1' }))); }
+      try { res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' }); const scopeParam = url.searchParams.get('usageScope'); res.end(JSON.stringify(await metrics({ conversationId: url.searchParams.get('conversationId'), force: url.searchParams.get('force') === '1', quotaRefresh: url.searchParams.get('quotaRefresh') === '1', ...(url.searchParams.get('usageOnly') === '1' ? { usageOnly: true } : {}), ...(scopeParam === 'local' || scopeParam === 'account' ? { usageScope: scopeParam } : {}) }))); }
       catch { res.writeHead(500); res.end('{"error":"数据暂时不可用"}'); }
       return;
     }

@@ -27,6 +27,13 @@ export function validatedInput(value) {
   // Historical usage import is an explicit, user-visible action. It must not
   // be started by the high-frequency inline metrics poll.
   if (value.usageSync === true) result.usageSync = true;
+  if (value.usageOnly === true) result.usageOnly = true;
+  if (value.usageScope === 'local' || value.usageScope === 'account') result.usageScope = value.usageScope;
+  if (value.quotaRefresh === true) result.quotaRefresh = true;
+  if (typeof value.composerModel === 'string') {
+    const composerModel = value.composerModel.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+    if (composerModel) result.composerModel = composerModel;
+  }
   return result;
 }
 
@@ -97,8 +104,8 @@ export class CdpConnection {
 }
 
 // Only sanitized metrics cross the bridge. No API credential or conversation text is exposed.
-function rendererBridge(binding) {
-  if (window !== window.top) return;
+function rendererBridge(binding, allowNested = false) {
+  if (window !== window.top && !allowNested) return;
   if (window.__agPulseRuntimeBridge && window.agPulseHost) return;
   window.__agPulseRuntimeBridge?.dispose();
   const pending = new Map(); let sequence = 0;
@@ -125,17 +132,17 @@ function rendererBridge(binding) {
   };
 }
 
-export function makeRendererSource(i18n, widget, theme = '', owner = null, generation = 0, extraSource = '') {
+export function makeRendererSource(i18n, widget, theme = '', owner = null, generation = 0, extraSource = '', {allowNested = false} = {}) {
   const extract = source => {
     const prefix = 'module.exports = ', index = source.indexOf(prefix);
     if (index < 0) throw new Error('Widget source format changed');
     return source.slice(index + prefix.length).trim().replace(/;$/, '');
   };
-  const version = createHash('sha256').update(i18n + widget + theme + extraSource + rendererBridge.toString()+JSON.stringify(owner)).digest('hex');
+  const version = createHash('sha256').update(i18n + widget + theme + extraSource + rendererBridge.toString()+JSON.stringify([owner,allowNested])).digest('hex');
   const upgrade = 'if(window.__agPulseRuntimeVersion!==' + JSON.stringify(version) + '){window.__agPulseDispose?.();window.__agPulseRuntimeBridge?.dispose();delete window.agPulseHost;window.__agPulseRuntimeVersion=' + JSON.stringify(version) + ';}';
   const binding=owner?BINDING+'_'+owner.replaceAll('-',''):BINDING;
   const rank=JSON.stringify([generation,owner||'']);
-  const code=upgrade + 'window.__agPulseRuntimeOwner='+JSON.stringify(owner)+';window.__agPulseRuntimeRank='+rank+';' + '(' + rendererBridge.toString() + ')('+JSON.stringify(binding)+');window.__agPulseI18nFactory=(' + extract(i18n) + ');'
+  const code=upgrade + 'window.__agPulseRuntimeOwner='+JSON.stringify(owner)+';window.__agPulseRuntimeRank='+rank+';' + '(' + rendererBridge.toString() + ')('+JSON.stringify(binding)+','+JSON.stringify(allowNested===true)+');window.__agPulseI18nFactory=(' + extract(i18n) + ');'
     + (theme ? 'window.__agPulseThemeFactory=(' + extract(theme) + ');' : '') + extraSource + '(' + extract(widget) + ')();';
   // A delayed injection from a superseded instance cannot replace a newer UI.
   return owner?'if(!window.__agPulseRuntimeRank||window.__agPulseRuntimeRank[0]<'+generation+'||(window.__agPulseRuntimeRank[0]==='+generation+'&&window.__agPulseRuntimeRank[1]<='+JSON.stringify(owner)+')){'+code+'}':code;
@@ -143,25 +150,40 @@ export function makeRendererSource(i18n, widget, theme = '', owner = null, gener
 
 export class RuntimeUi {
   constructor({ snapshot, source, profile = platformPaths().profile,
-    dataDir, preferences, updater=null, owner=null, owns=async()=>true, enabled = async () => true, discover = discoverTargets, targetOrigin = target => new URL(target.url).origin, connect = (url, options) => new CdpConnection(url, options), interval = 3000 } = {}) {
+    dataDir, preferences, updater=null, owner=null, owns=async()=>true, enabled = async () => true, discover = discoverTargets, targetOrigin = target => new URL(target.url).origin, sourceForTarget = () => source, connect = (url, options) => new CdpConnection(url, options), interval = 3000 } = {}) {
     this.snapshot = snapshot; this.source = source; this.profile = profile; this.dataDir = dataDir; this.enabled = enabled;
     this.discover = discover; this.connect = connect; this.interval = interval; this.sessions = new Map(); this.running = false;
     this.targetOrigin=targetOrigin;
+    this.sourceForTarget=sourceForTarget;
     this.health = { state: 'waiting', mode: 'runtime', message: 'Waiting for the app renderer', windows: 0 };
     this.preferences=preferences;
     this.updater=updater;
     this.owner=owner;this.owns=owns;
     this.binding=owner?BINDING+'_'+owner.replaceAll('-',''):BINDING;
+    this.rendererTheme={};
   }
   async setHealth(state, message) {
     this.health = { state, mode: 'runtime', message, windows: this.sessions.size, checkedAt: new Date().toISOString() };
     if (this.dataDir&&await this.owns()) { try { await mkdir(this.dataDir, { recursive: true }); await writeFile(join(this.dataDir, 'integration-state.json'), JSON.stringify(this.health)); } catch { /* Read-only state reporting must not crash collection. */ } }
   }
   async event(connection, message) {
-    if(this.stopping||!await this.owns())return;
+    if(this.stopping)return;
     const p = message.params || {};
+    if(connection.closed)return;
+    // Revoke synchronously in protocol event order. An asynchronous ownership
+    // read must never let an old binding overtake a navigation notification.
+    if(connection.ideWebview&&((message.method==='Page.frameNavigated'&&(p.frame?.id===connection.frameId||p.frame?.parentId===connection.parentFrameId))||
+      (message.method==='Page.navigatedWithinDocument'&&p.frameId===connection.frameId)||
+      (message.method==='Page.frameDetached'&&p.frameId===connection.frameId)||message.method==='Runtime.executionContextsCleared'||
+      (message.method==='Runtime.executionContextDestroyed'&&connection.contexts.has(p.executionContextId)))){
+      connection.revoked=true;connection.generation++;
+      for(const id of connection.contexts)connection.retiredContexts.add(id);
+      connection.contexts.clear();connection.mounted=false;return;
+    }
+    if(connection.revoked)return;
     if(message.method==='Page.frameNavigated'&&p.frame&&!p.frame.parentId){
       const replaced=connection.frameId!==p.frame.id;
+      connection.generation++;
       connection.frameId=p.frame.id;connection.contexts.clear();connection.mounted=false;
       const trusted=p.frame.url===connection.origin||p.frame.url?.startsWith(connection.origin+'/');
       // With an unchanged frame ID, prior document contexts may not yet have
@@ -177,12 +199,15 @@ export class RuntimeUi {
       }
       return;
     }
-    if (message.method === 'Runtime.executionContextsCleared') { connection.contexts.clear();connection.contextCandidates.clear();connection.mounted=false;return; }
-    if (message.method === 'Runtime.executionContextDestroyed') { connection.contexts.delete(p.executionContextId);connection.contextCandidates.delete(p.executionContextId);return; }
+    if (message.method === 'Runtime.executionContextsCleared') { connection.generation++;connection.contexts.clear();connection.contextCandidates.clear();connection.mounted=false;return; }
+    if (message.method === 'Runtime.executionContextDestroyed') { if(connection.contexts.has(p.executionContextId))connection.generation++;connection.contexts.delete(p.executionContextId);connection.contextCandidates.delete(p.executionContextId);return; }
     if (message.method !== 'Runtime.bindingCalled' || p.name !== this.binding || !connection.contexts.has(p.executionContextId)) return;
+    if(!await this.owns()||connection.closed||connection.revoked||!connection.contexts.has(p.executionContextId))return;
     if (typeof p.payload !== 'string' || p.payload.length > 4096 || connection.inflight >= 8) return;
     let input;
     try { input = JSON.parse(p.payload); if (!Number.isSafeInteger(input.id) || input.id < 1) return; } catch { return; }
+    const generation=connection.generation;
+    const current=()=>!connection.closed&&!connection.revoked&&connection.generation===generation&&connection.contexts.has(p.executionContextId);
     connection.inflight++;
     try {
       let result = {};
@@ -193,18 +218,18 @@ export class RuntimeUi {
       }
       else if (input.type === 'preferences' && this.preferences) {
         const value=input.input;
-        if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>!['language','languageGuideDismissed','usageGuideDismissed'].includes(key)))throw new Error('Invalid preferences request');
+        if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>!['language','languageGuideDismissed','usageGuideDismissed','speedStyle','usageScope'].includes(key)))throw new Error('Invalid preferences request');
         result=Object.keys(value).length?await this.preferences.set(value):await this.preferences.get();
       }
       else if (input.type === 'diagnostic' && ['boot', 'mounted', 'mount-error'].includes(input.input?.stage)) {
         if (input.input.stage === 'mounted' && input.input.editorFound && input.input.composerFound) connection.mounted = true;
       } else return;
       if (JSON.stringify(result).length > 1048576) result = offline('Metrics response too large');
-      if(this.stopping||!await this.owns())return;
+      if(this.stopping||!await this.owns()||!current())return;
       await connection.command('Runtime.evaluate', { expression: this.rendererGuard('window.__agPulseRuntimeBridge?.resolve(' + input.id + ',' + JSON.stringify(result) + ')'), contextId: p.executionContextId });
     } catch {
       const failure=input.type==='preferences'?{error:'Language preference could not be saved or read'}:offline('等待 Antigrative Dashboard 重新连接');
-      if(this.stopping||!await this.owns())return;
+      if(this.stopping||!await this.owns()||!current())return;
       try { await connection.command('Runtime.evaluate', { expression: this.rendererGuard('window.__agPulseRuntimeBridge?.resolve(' + input.id + ',' + JSON.stringify(failure) + ')'), contextId: p.executionContextId }); } catch { /* The next poll reconnects. */ }
     } finally { connection.inflight--; }
   }
@@ -213,19 +238,31 @@ export class RuntimeUi {
     let connection;
     connection = this.connect(target.webSocketDebuggerUrl, { onEvent: message => { void this.event(connection, message); } });
     connection.origin = this.targetOrigin(target);
+    connection.ideWebview=target.ideWebview===true;
+    connection.parentFrameId=target.expectedParentId;
+    connection.proofKey=target.ideWebview?JSON.stringify([target.expectedFrameId,target.expectedParentId,target.expectedUrl,target.workbenchId]):null;
+    connection.generation=0;connection.revoked=false;
+    connection.retiredContexts=new Set();
     connection.contexts = new Set();connection.contextCandidates=new Map(); connection.inflight = 0; connection.mounted = false;
     try {
       await connection.open();
       if(this.stopping||!await this.owns())throw new Error('Sidecar ownership changed');
       const frame = await connection.command('Page.getFrameTree'); connection.frameId = frame.frameTree?.frame?.id;
       if (!connection.frameId) throw new Error('Main renderer frame unavailable');
+      if(connection.ideWebview&&(connection.frameId!==target.expectedFrameId||frame.frameTree.frame.url!==target.expectedUrl||
+        frame.frameTree.frame.parentId!==target.expectedParentId))throw new Error('IDE Agent frame changed during discovery');
       await connection.command('Page.enable');
       await connection.command('Runtime.enable');
+      if(connection.ideWebview&&(connection.revoked||connection.closed))throw new Error('IDE Agent context changed during attachment');
       await connection.command('Runtime.addBinding', { name: this.binding });
-      const guardedSource = 'if (location.origin === ' + JSON.stringify(connection.origin) + ') {' + this.source + '}';
+      const guardedSource = 'if (location.origin === ' + JSON.stringify(connection.origin) +
+        (connection.ideWebview?' && location.href === '+JSON.stringify(target.expectedUrl):'') + ') {' + this.sourceForTarget(target) + '}';
       connection.guardedSource = guardedSource;
-      connection.script = (await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: guardedSource })).identifier;
+      // Nested Agent documents receive no persistent preload. Every replacement
+      // must pass IDE ownership/resource/frame validation again.
+      if(!connection.ideWebview)connection.script = (await connection.command('Page.addScriptToEvaluateOnNewDocument', { source: guardedSource })).identifier;
       if(this.stopping||!await this.owns()){await connection.command('Page.removeScriptToEvaluateOnNewDocument',{identifier:connection.script});throw new Error('Sidecar ownership changed');}
+      if(connection.ideWebview&&(connection.revoked||connection.closed||!connection.contexts.size))throw new Error('IDE Agent context changed during attachment');
       const result = await connection.command('Runtime.evaluate', { expression: guardedSource });
       if (result.exceptionDetails) throw new Error('Widget initialization failed');
       return connection;
@@ -245,18 +282,21 @@ export class RuntimeUi {
       if (!await this.enabled()) { await this.detachAll(); await this.setHealth('disabled', 'Dashboard is disabled'); return; }
       const targets = await this.discover(this.profile), active = new Set(targets.map(t => t.webSocketDebuggerUrl));
       if (this.stopping||!await this.owns()) return;
-      for (const [url, connection] of this.sessions) if (!active.has(url) || connection.closed) { connection.close(); this.sessions.delete(url); }
+      for (const [url, connection] of this.sessions) if (!active.has(url) || connection.closed || connection.revoked) { await this.detach(connection); this.sessions.delete(url); }
       for (const target of targets) {
         const connection = this.sessions.get(target.webSocketDebuggerUrl);
-        if (connection && connection.origin !== this.targetOrigin(target)) { connection.close(); this.sessions.delete(target.webSocketDebuggerUrl); }
+        const proofKey=target.ideWebview?JSON.stringify([target.expectedFrameId,target.expectedParentId,target.expectedUrl,target.workbenchId]):null;
+        if (connection && (connection.origin !== this.targetOrigin(target)||connection.proofKey!==proofKey)) { await this.detach(connection); this.sessions.delete(target.webSocketDebuggerUrl); }
       }
       for (const target of targets) if (!this.sessions.has(target.webSocketDebuggerUrl)) this.sessions.set(target.webSocketDebuggerUrl, await this.attach(target));
       if (this.stopping||!await this.owns()) { await this.detachAll(); return; }
+      let sampledTheme={};
       for (const [url, connection] of this.sessions) {
         try {
           // Cold-start navigation may replace the top frame or lose its context
           // events while hooks still exist. Resynchronize on the same socket.
           if(!connection.contexts.size){
+            if(connection.ideWebview)throw new Error('IDE Agent execution context unavailable');
             const frame=await connection.command('Page.getFrameTree');connection.frameId=frame.frameTree?.frame?.id;
             connection.contextCandidates.clear();
             await connection.command('Runtime.disable');await connection.command('Runtime.enable');
@@ -266,10 +306,12 @@ export class RuntimeUi {
             await connection.command('Runtime.evaluate',{expression:this.rendererGuard('window.__agPulseRuntimeBridge?.reconnect?.();')});
           }
           const result = await connection.command('Runtime.evaluate', { returnByValue: true,
-            expression: '({mounted:Boolean(document.getElementById("ag-pulse-status-bar")?.isConnected),installed:Boolean(window.__agPulseInlineInstalled),bridge:Boolean(window.__agPulseRuntimeBridge && window.agPulseHost'+(this.owner?' && window.__agPulseRuntimeBridge.binding==='+JSON.stringify(this.binding):'')+')})' });
+            expression: '(()=>{const mounted=Boolean(document.getElementById("ag-pulse-status-bar")?.isConnected),installed=Boolean(window.__agPulseInlineInstalled),bridge=Boolean(window.__agPulseRuntimeBridge && window.agPulseHost'+(this.owner?' && window.__agPulseRuntimeBridge.binding==='+JSON.stringify(this.binding):'')+');let fontFamily=null,monoFontFamily=null;try{const pick=(els,vars)=>{for(const el of els){if(!el)continue;for(const v of vars){const s=(el.style?.getPropertyValue?.(v)||getComputedStyle(el).getPropertyValue(v)||"").trim();if(s)return s;}}return null;};const base=[document.querySelector(\'[data-testid="model-selector-trigger"], .rounded-composer, .monaco-workbench\'),document.body,document.documentElement];fontFamily=pick(base,[\'--ui-font-family\',\'--font-sans\',\'--font-family\',\'--vscode-font-family\',\'--antigravity-font-family\']);if(!fontFamily){for(const el of base){if(!el||el.hasAttribute?.("data-ag-pulse-bar"))continue;const f=getComputedStyle(el).fontFamily;if(f){fontFamily=f;break;}}}monoFontFamily=pick(base,[\'--vscode-editor-font-family\',\'--font-mono\']);}catch{}return {mounted,installed,bridge,fontFamily,monoFontFamily};})()' });
           if(result.exceptionDetails)throw new Error('Renderer document is not ready');
           const status = result.result?.value;
           connection.mounted = status?.mounted === true;
+          if(!connection.ideWebview&&(status?.fontFamily||status?.monoFontFamily))sampledTheme={fontFamily:status.fontFamily||undefined,monoFontFamily:status.monoFontFamily||undefined};
+          else if(!sampledTheme.fontFamily&&!sampledTheme.monoFontFamily&&(status?.fontFamily||status?.monoFontFamily))sampledTheme={fontFamily:status.fontFamily||undefined,monoFontFamily:status.monoFontFamily||undefined};
           // Startup can swap the document between discovery and first injection.
           // Reinstall missing hooks rather than waiting forever for a composer.
           if (status && (!status.installed || !status.bridge)) {
@@ -280,26 +322,37 @@ export class RuntimeUi {
         } catch {
           // Navigation failures must not accumulate a preload on each retry.
           try{if(connection.script)await connection.command('Page.removeScriptToEvaluateOnNewDocument',{identifier:connection.script});}catch{}
-          connection.close();this.sessions.delete(url);
+          await this.detach(connection);this.sessions.delete(url);
         }
       }
-      await this.setHealth([...this.sessions.values()].some(c => c.mounted) ? 'mounted' : this.sessions.size ? 'waiting-for-composer' : 'waiting',
-        this.sessions.size ? 'Renderer connected; waiting for a conversation composer if needed' : 'Waiting for the app renderer');
+      this.rendererTheme={};
+      for(const k of ['fontFamily','monoFontFamily']){
+        const v=typeof sampledTheme[k]==='string'?sampledTheme[k].trim():'';
+        if(v&&v.length<=240&&!/[;{}<>\\/\n\r\0]|url\s*\(|var\s*\(|expression\s*\(|javascript:|@import/i.test(v))this.rendererTheme[k]=v;
+      }
+      const mounted=[...this.sessions.values()].some(c=>c.mounted);
+      await this.setHealth(mounted ? 'mounted' : this.sessions.size ? 'waiting-for-composer' : 'waiting',
+        mounted ? 'Dashboard attached to the conversation composer' : this.sessions.size ? 'Renderer connected; waiting for a conversation composer if needed' : 'Waiting for the app renderer');
     } catch { await this.setHealth('reconnecting', 'Inline connection unavailable; the side panel remains available. Retrying automatically.'); }
     finally { this.busy = false; }
   }
-  async detachAll() {
-    for (const connection of this.sessions.values()) {
-      try {
-        // A superseded process must not dispose the newer process's widget.
-        if(await this.owns())await connection.command('Runtime.evaluate', { expression: this.rendererGuard('window.__agPulseDispose?.();window.__agPulseRuntimeBridge?.dispose();delete window.agPulseHost;') });
-        if (connection.script) await connection.command('Page.removeScriptToEvaluateOnNewDocument', { identifier: connection.script });
-        // Owner-specific bindings can be removed without affecting a new instance.
-        if(this.owner||await this.owns())await connection.command('Runtime.removeBinding', { name: this.binding });
-      } catch { /* A closed renderer has already removed its widget. */ }
-      connection.close();
+  async detach(connection) {
+    // Retired contexts remain cleanup-only: a same-document route change can
+    // leave timers and pending bridge calls alive after authorization is revoked.
+    const owned=await this.owns();
+    if(owned){
+      const ids=connection.ideWebview?[...new Set([...connection.contexts,...connection.retiredContexts])]:[undefined];
+      for(const contextId of ids)try{
+        await connection.command('Runtime.evaluate',{expression:this.rendererGuard('window.__agPulseDispose?.();window.__agPulseRuntimeBridge?.dispose();delete window.agPulseHost;'),...(contextId===undefined?{}:{contextId})});
+      }catch{/* Destroyed contexts need no cleanup; still remove the preload/binding. */}
     }
-    this.sessions.clear();
+    try{if(connection.script)await connection.command('Page.removeScriptToEvaluateOnNewDocument',{identifier:connection.script});}catch{}
+    try{if(this.owner||owned)await connection.command('Runtime.removeBinding',{name:this.binding});}catch{}
+    connection.close();
+  }
+  async detachAll() {
+    for (const connection of this.sessions.values()) await this.detach(connection);
+    this.sessions.clear();this.rendererTheme={};
   }
   start() {
     if (this.running) return; this.running = true; this.stopping = false;
