@@ -15,7 +15,7 @@ body{margin:0;padding:36px;background:#161719;color:#e5e5e5;font:14px -apple-sys
 </style><main class="demo"><h1>完整数值 ⇄ 三图标</h1><p>调整宽度或点击按钮，观察数值淡出、图标收拢和模型名称淡入。<br>这页使用插件的真实控件代码，数据是演示数据。</p>
 <section class="composer"><div class="editor" contenteditable="true" role="textbox">Ask anything, @ to mention, / for actions</div><div class="actions"><button class="protected" title="Add">＋</button><div class="model-branch" style="flex:1 1 180px;min-width:20px;max-width:180px;overflow:hidden"><button data-testid="model-selector-trigger">Gemini 3.8 Flash Medium ⌃</button></div><div class="controls"><button class="protected" title="Microphone">♩</button><button class="protected" title="Send">➜</button></div></div></section>
 <div class="tools"><button id="full">展开数值</button><button id="icons">收起为图标</button><input id="width" aria-label="输入框宽度" type="range" min="280" max="780" value="660"><span id="width-value" class="status">660 px</span></div><p class="hint">可以快速连续切换。图标在过渡期间仍可点击，点击后展示真实详情卡。</p></main>
-<script>history.replaceState({},'', '/c/${id}');window.agPulseHost={getMetrics:async()=>(${JSON.stringify(metrics)}),getPreferences:async()=>({language:'en',languageGuideDismissed:true,revision:1}),setPreferences:async x=>({...x,revision:2}),report:()=>{}};window.nativeClicks=0;document.querySelectorAll('.protected,[data-testid="model-selector-trigger"]').forEach(b=>b.onclick=()=>window.nativeClicks++);</script><script src="/widget.js"></script><script>
+<script>window.testMetrics=new URLSearchParams(location.search).has('empty')?{connection:'live',groups:[],speed:null}:${JSON.stringify(metrics)};history.replaceState({},'', '/c/${id}');window.agPulseHost={getMetrics:async()=>window.testMetrics,getPreferences:async()=>({language:'en',languageGuideDismissed:true,revision:1}),setPreferences:async x=>({...x,revision:2}),report:()=>{}};window.nativeClicks=0;document.querySelectorAll('.protected,[data-testid="model-selector-trigger"]').forEach(b=>b.onclick=()=>window.nativeClicks++);</script><script src="/widget.js"></script><script>
 full.onclick=()=>{const w=document.getElementById('ag-pulse-status-bar');w.style.flex='0 0 auto';w.style.maxWidth='100%';document.querySelector('.composer').style.width='660px';width.value=660;document.getElementById('width-value').textContent='660 px';};
 icons.onclick=()=>{const w=document.getElementById('ag-pulse-status-bar');w.style.flex='0 0 80px';w.style.maxWidth='80px';document.querySelector('.composer').style.width='480px';width.value=480;document.getElementById('width-value').textContent='480 px';};
 width.oninput=()=>{document.querySelector('.composer').style.width=width.value+'px';const w=document.getElementById('ag-pulse-status-bar');w.style.flex='0 1 auto';w.style.maxWidth='100%';document.getElementById('width-value').textContent=width.value+' px';};
@@ -125,7 +125,31 @@ try{
     for(let i=0;i<12;i++){section.style.width=(boundary+(i%2)*4)+'px';await frame();if(w.dataset.density!=='icons')throw new Error('Density chatter near threshold');}
     mo.disconnect();section.style.width='740px';await frame();return {classChanges:changes,restored:w.dataset.density==='full'};
    });assert.equal(threshold.classChanges,0,JSON.stringify(threshold));assert.equal(threshold.restored,true);
-   results.push({reducedMotion,continuity,fixedTimeSamples:true,threeIcons:true,nativeHitTargets:true,visualRibbonClipped:true,rapidReversal:true,noHeartbeatReplay:true,collisionCancels:true,disposeRestoresHost:true,continuousDrag:drag,threshold});
+   // Empty conversations start in 3-icon compact mode and spring-expand when data arrives.
+   await page.goto(base+'/?empty=1');await strip.waitFor();
+   await page.waitForFunction(()=>{const w=document.getElementById('ag-pulse-status-bar');return w?.dataset.layout==='ready'&&w.dataset.density==='icons';});
+   await page.waitForTimeout(250);
+   const emptyHead=await page.evaluate(sample);
+   const visibleTexts=await strip.evaluate(w=>[...w.shadowRoot.querySelectorAll('.bar .chip>:not(svg):not(.context-ring)')].filter(e=>e.getClientRects().length>0).length);
+   assert.equal(emptyHead.moving,false);assert.equal(emptyHead.icons,3);assert.equal(visibleTexts,0,'Empty session hides dash text placeholders');
+   await page.evaluate(()=>{
+    const animate=Element.prototype.animate,animations=[];
+    window.springTestClock={animations,restore:()=>{Element.prototype.animate=animate;for(const a of animations)if(a.playState==='paused')a.play();}};
+    Element.prototype.animate=function(...args){const a=animate.apply(this,args);a.pause();a.currentTime=0;animations.push(a);return a;};
+   });
+   await page.evaluate(m=>{window.testMetrics=m;document.getElementById('ag-pulse-status-bar').shadowRoot.querySelector('.refresh').click();},metrics);
+   await page.waitForFunction(()=>document.getElementById('ag-pulse-status-bar')?.dataset.motionKind==='spring');
+   const springStart=await page.evaluate(sample);assert.equal(springStart.moving,true);assert.equal(springStart.density,'full');assert.equal(springStart.icons,3);
+   await nativeSafe(page);
+   await page.evaluate(()=>{for(const a of window.springTestClock.animations)a.currentTime=240;});
+   const springMid=await page.evaluate(()=>{const s=document.getElementById('ag-pulse-status-bar').shadowRoot,stage=s.querySelector('.density-stage'),rings=[...stage.querySelectorAll('.density-piece.context-ring')],real=s.getElementById('context-ring');return {stageLeft:stage.getBoundingClientRect().left,ringX:rings[0]?.getBoundingClientRect().x,realX:real.getBoundingClientRect().x,transform:rings[0]&&getComputedStyle(rings[0]).transform};});
+   await nativeSafe(page);
+   if(reducedMotion==='no-preference')assert.ok(springMid.ringX>springMid.realX,'Spring expand must smoothly overshoot its target before settling: '+JSON.stringify(springMid));
+   else assert.equal(springMid.transform,'matrix(1, 0, 0, 1, 0, 0)','Reduced motion avoids overshoot movement');
+   await page.evaluate(()=>{window.springTestClock.restore();delete window.springTestClock;});
+   await page.waitForFunction(()=>{const w=document.getElementById('ag-pulse-status-bar');return !w.dataset.motion&&w.dataset.density==='full'&&w.shadowRoot.getElementById('tps').textContent==='152.0';},{},{timeout:2000});
+   assert.equal((await page.evaluate(sample)).stage,false);
+   results.push({reducedMotion,continuity,fixedTimeSamples:true,threeIcons:true,nativeHitTargets:true,visualRibbonClipped:true,rapidReversal:true,noHeartbeatReplay:true,collisionCancels:true,disposeRestoresHost:true,emptySpringExpand:true,continuousDrag:drag,threshold});
   }finally{await page.close();}
  }
  assert.deepEqual(errors,[]);console.log(JSON.stringify({cases:results,pageErrors:errors},null,2));

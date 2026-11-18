@@ -37,28 +37,38 @@ try{
  await page.setViewportSize({width:430,height:800});await page.waitForTimeout(350);assert.equal((await state()).density,'icons');
  await page.setViewportSize({width:245,height:800});await page.waitForTimeout(350);const tiny=await state();assert.equal(tiny.rect.width,0);assert.equal(tiny.layout,'blocked');
  await page.setViewportSize({width:430,height:800});await page.waitForTimeout(350);assert.equal((await state()).layout,'ready');
- // Keep a constrained, scrolled card open across multiple real polling ticks.
- // Identical preferences must not replace its labels or oscillate maxHeight.
+ // Compact card fits at normal desktop height without clipping, and still
+ // preserves scroll position when viewport headroom is constrained.
  await page.locator('[data-card=context]').click();
  assert.equal(await page.locator('#transcript-details,#context-host-limit,#context-provider-limit,#context-compaction-limit,#context-note').count(),0);
+ assert.equal(await page.locator('#context-card').evaluate(c=>c.scrollHeight<=c.clientHeight+1),true,'Compact context card fits without scrollbars at normal viewport');
+ await page.keyboard.press('Escape');
+ await page.evaluate(()=>{document.querySelector('.top').style.height='90px';});await page.setViewportSize({width:430,height:240});await page.waitForTimeout(200);
+ await page.locator('[data-card=context]').click();await page.waitForTimeout(150);
  const stable=await page.evaluate(async()=>{
    const root=document.getElementById('ag-pulse-status-bar').shadowRoot,card=root.getElementById('context-card');
-   card.scrollTop=80;const scroll=card.scrollTop,rect=card.getBoundingClientRect().toJSON(),requests=metricsRequests.length;
+   card.scrollTop=60;const scroll=card.scrollTop,rect=card.getBoundingClientRect().toJSON(),requests=metricsRequests.length;
    const changes=[],samples=[];const observer=new MutationObserver(records=>{for(const record of records){const id=record.target.id;if(!['five-countdown','week-countdown','five-timer','week-timer'].includes(id))changes.push({id,attribute:record.attributeName,type:record.type});}});
    observer.observe(root,{subtree:true,childList:true,attributes:true});
    const sample=()=>{samples.push(card.scrollTop);};const timer=setInterval(sample,16);
    await new Promise(r=>setTimeout(r,6500));clearInterval(timer);observer.disconnect();
    return {scroll,rect,finalRect:card.getBoundingClientRect().toJSON(),maxScrollDelta:Math.max(...samples.map(s=>Math.abs(s-scroll))),changes,polls:metricsRequests.length-requests,open:card.matches(':popover-open')};
  });
- assert.ok(stable.scroll>0,'Fixture must actually clip and scroll the card');assert.ok(stable.polls>=2);assert.equal(stable.maxScrollDelta,0);assert.deepEqual(stable.finalRect,stable.rect);assert.deepEqual(stable.changes,[]);assert.equal(stable.open,true);
- await page.locator('.group-trigger').click();await page.waitForTimeout(3300);assert.ok(await page.locator('.group-menu').isVisible());await page.locator('[data-group="3p"]').click();
+ assert.ok(stable.scroll>0,'Constrained viewport must clip and scroll the card');assert.ok(stable.polls>=2);assert.equal(stable.maxScrollDelta,0);assert.deepEqual(stable.finalRect,stable.rect);assert.deepEqual(stable.changes,[]);assert.equal(stable.open,true);
+ await page.keyboard.press('Escape');
+ await page.evaluate(()=>{document.querySelector('.top').style.removeProperty('height');});await page.setViewportSize({width:430,height:800});await page.waitForTimeout(200);
+ await page.locator('[data-card=context]').click();await page.waitForTimeout(150);
+ assert.equal(await page.locator('#active-group-name').textContent(),'Gemini');
+ await page.waitForTimeout(3300);assert.ok(await page.locator('#quota-siblings [data-group="3p"]').isVisible());await page.locator('#quota-siblings [data-group="3p"]').click();
+ assert.equal(await page.locator('#active-group-name').textContent(),'Claude / GPT');
+ assert.ok(await page.locator('#quota-siblings [data-group="gemini"]').isVisible());
  await page.evaluate(()=>{testTps=200;});await page.waitForFunction(()=>document.getElementById('ag-pulse-status-bar').shadowRoot.getElementById('tps').textContent==='200.0');
  await page.evaluate(()=>{const original=agPulseHost.getMetrics;agPulseHost.getMetrics=async input=>{const data=await original(input);return {...data,speed:data.speed&&testQuality?{...data.speed,...testQuality,conversationId:data.speed.conversationId}:data.speed};};});
  const quality=trajectoryMetrics({trajectory:{generatorMetadata:[{stepIndices:[0],chatModel:{usage:{outputTokens:17776,responseOutputTokens:17776},streamingDuration:.349271,timeToFirstToken:106}}],steps:[{type:'CORTEX_STEP_TYPE_PLANNER_RESPONSE',plannerResponse:{toolCalls:[{}]}}]}});
  await page.evaluate(quality=>{testQuality=quality;},quality);
  await page.waitForFunction(()=>document.getElementById('ag-pulse-status-bar').shadowRoot.getElementById('latest-rate').textContent==='Timing uncertain');
  await page.keyboard.press('Escape');await page.locator('[data-card=speed]').click();
- assert.equal(await page.locator('#rate-note').textContent(),'Calculation: response tokens ÷ streaming time; session TPS is time-weighted.');
+ assert.equal(await page.locator('#rate-note').count(),0,'The speed card has no calculation footnote that could resize it');
  assert.equal(await page.locator('#tps').textContent(),'—');
  await page.screenshot({path:join(repo,'.data/ide/tps-quality-en.png')});
  await page.evaluate(()=>{testQuality=null;});
@@ -67,7 +77,7 @@ try{
  await page.locator('[data-card=context]').click();await page.locator('#card-language-zh').click();await page.waitForTimeout(150);assert.equal((await state()).lang,'zh-CN');assert.equal(await page.locator('#transcript-details').count(),0);await page.keyboard.press('Escape');
  await page.evaluate(quality=>{testQuality=quality;},quality);
  await page.waitForFunction(()=>document.getElementById('ag-pulse-status-bar').shadowRoot.getElementById('latest-rate').textContent==='计时异常');
- await page.locator('[data-card=speed]').click();assert.equal(await page.locator('#rate-note').textContent(),'统计方式：正文 Token ÷ 流式时长；会话 TPS 按总时长加权。');
+ await page.locator('[data-card=speed]').click();assert.equal(await page.locator('#rate-note').count(),0);assert.equal(await page.locator('#latest-rate').textContent(),'计时异常');
  await page.screenshot({path:join(repo,'.data/ide/tps-quality-zh.png')});await page.keyboard.press('Escape');await page.evaluate(()=>{testQuality=null;});
  // A different child/subagent/history ID must never win over the input owner.
  await page.evaluate(other=>{const decoy={props:{cascadeId:other},__k:[]};testOwner.__k.unshift(decoy);},other);

@@ -67,7 +67,8 @@ async function checkSurfaces(page,scope,inline){
     for(const text of ['foreground','chip','muted','subtle','label','control-text','emphasis'])for(const surface of ['card','background','control']){
       result.ratios.push({text,surface,ratio:ratio(luminance(rgb(text)),luminance(rgb(surface)))});
     }
-    result.gradient=getComputedStyle(root.querySelector('#context-card')).backgroundImage;
+    result.cardBackground=getComputedStyle(root.querySelector('#context-card')).backgroundColor;
+    result.backgroundImage=getComputedStyle(root.querySelector('#context-card')).backgroundImage;
     return result;
   });
   const wait=async expected=>{
@@ -86,7 +87,8 @@ async function checkSurfaces(page,scope,inline){
       ['light','#e8efff','oklch(95% 0.02 260)','#dce8ff','rgb(232, 239, 255)']
     ]){
       await set(...fixture.slice(0,4));const state=await wait(fixture[4]);
-      assert.ok(state.gradient.includes(state.card),'Actual hover-card gradient must use the host surface');
+      assert.equal(state.cardBackground,state.card,'Actual hover-card background must use the host surface');
+      assert.equal(state.backgroundImage,'none','Hover card uses flat surface token without decorative gradient');
       assert.equal(state.menu,state.card,'Quota menu must follow the card surface');
       assert.ok(state.ratios.every(item=>item.ratio>=4.5),JSON.stringify(state));
       assert.equal(await scope.locator('#context-summary').textContent(),before);
@@ -163,6 +165,46 @@ async function checkAccent(page,scope,inline){
   if(inline){
     await scope.locator('[data-card=context]').hover();await page.screenshot({path:join(output,'host-accent-inline.png')});
   }else await page.screenshot({path:join(output,'host-accent-panel.png')});
+}
+async function checkHoverQuotaRefresh(page,host,chip){
+  let quotaHits=0,release,seen,arrivalTimeout;
+  const waiting=new Promise(resolve=>{release=resolve;});
+  const arrived=new Promise(resolve=>{seen=resolve;});
+  const handler=async route=>{
+    if(new URL(route.request().url()).searchParams.get('quotaRefresh')!=='1'){await route.continue();return;}
+    quotaHits++;seen();await waiting;await route.fulfill({contentType:'application/json',body:JSON.stringify(sample())});
+  };
+  await page.mouse.move(0,0);
+  await page.waitForTimeout(4200);
+  await page.route('**/api/metrics**',handler);
+  const spinner=host.locator('#quota-spinner');
+  try{
+    await chip.hover();
+    await Promise.race([arrived,new Promise((_,reject)=>{arrivalTimeout=setTimeout(()=>reject(new Error('Hover quota refresh request did not arrive')),7000);})]);clearTimeout(arrivalTimeout);
+    await host.locator('#context-card').waitFor({state:'visible'});
+    await spinner.waitFor({state:'visible'});
+    assert.equal(await spinner.getAttribute('aria-busy'),'true');
+    assert.equal(await spinner.locator('svg').evaluate(e=>getComputedStyle(e).animationName),'pulse-refresh-spin');
+    const icon=await spinner.locator('svg').elementHandle();
+    const before=await icon.evaluate(e=>getComputedStyle(e).transform);
+    await page.waitForFunction(({icon,before})=>getComputedStyle(icon).transform!==before,{icon,before},{timeout:5000});
+    assert.equal(await spinner.getAttribute('aria-busy'),'true','Spinner must rotate while hover quota refresh is pending');
+    await icon.dispose();
+    await page.emulateMedia({reducedMotion:'reduce'});
+    assert.equal(await spinner.locator('svg').evaluate(e=>getComputedStyle(e).animationName),'none');
+    assert.equal(await spinner.getAttribute('aria-busy'),'true');
+    const paceBusy=await host.locator('#quota-pace').boundingBox();
+    release();
+    await page.waitForFunction(()=>{const el=document.getElementById('ag-pulse-status-bar')?.shadowRoot?.getElementById('quota-spinner');return el?.getAttribute('aria-busy')==='false'&&el?.hidden===true;});
+    assert.equal(quotaHits,1);
+    assert.equal(await host.locator('#quota-pace').isVisible(),true);
+    const paceIdle=await host.locator('#quota-pace').boundingBox();
+    assert.ok(paceBusy&&paceIdle&&Math.abs(paceBusy.x-paceIdle.x)<0.5&&Math.abs(paceBusy.width-paceIdle.width)<0.5,'#quota-pace must stay pinned without shifting when spinner hides');
+    assert.equal(await host.locator('#five-reset,#week-reset').count(),0);
+    assert.match(await host.locator('#week-countdown').textContent(),/^\d+d \d+h \d+m$|^\d+h \d+m$/);
+    assert.ok((await host.locator('#five-forecast-text').textContent()).trim().length>0);
+    assert.match(await host.locator('#five-forecast').getAttribute('title')||'',/\d/,'Time remaining moved into the forecast tooltip');
+  }finally{clearTimeout(arrivalTimeout);release();await page.unrouteAll({behavior:'wait'});await page.emulateMedia({reducedMotion:'no-preference'});}
 }
 async function checkRefresh(page,button){
   let forced=0,release,forcedSeen,arrivalTimeout;
@@ -285,35 +327,32 @@ try {
     await contextChip.hover();await host.locator('#card-language-zh').click();
     assert.match(await host.locator('#context-summary').textContent(),/44%/);
     await page.screenshot({path:join(output,`${mode}-inline.png`)});
-    await host.locator('.group-trigger').click();
+    assert.match(await host.locator('#active-group-name').textContent(),/Gemini/);
+    assert.equal(await host.locator('#quota-siblings [data-group="3p"]').isVisible(),true);
+    await host.locator('#quota-siblings [data-group="3p"]').click();
     await page.waitForTimeout(180);
     assert.equal(await host.locator('#context-card').isVisible(),true,`${mode}: composer focus stole the quota card`);
-    assert.equal(await host.locator('.group-menu').isVisible(),true,`${mode}: quota menu disappeared after clicking`);
     assert.equal(await page.evaluate(()=>window.testComposerClicks),0,'Widget clicks must not activate composer focus handlers');
-    await host.locator('[data-group="3p"]').click();await page.waitForTimeout(180);
-    assert.equal(await host.locator('#context-card').isVisible(),true);
-    assert.equal(await host.locator('.group-menu').isVisible(),false);
-    assert.match(await host.locator('.group-trigger').textContent(),/Claude \/ GPT/);
+    assert.match(await host.locator('#active-group-name').textContent(),/Claude \/ GPT/);
     assert.match(await host.locator('#five-balance').textContent(),/41\.7%/);
-    await host.locator('.group-trigger').focus();await page.keyboard.press('Enter');
-    assert.equal(await host.locator('.group-menu').isVisible(),true);
-    await host.locator('[data-group="gemini"]').focus();await page.keyboard.press('Enter');
+    assert.equal(await host.locator('#quota-siblings [data-group="gemini"]').isVisible(),true);
+    await host.locator('#quota-siblings [data-group="gemini"]').focus();await page.keyboard.press('Enter');
     await page.waitForTimeout(180);
     assert.equal(await host.locator('#context-card').isVisible(),true);
-    assert.equal(await host.locator('.group-trigger').evaluate(e=>e.getRootNode().activeElement===e),true);
+    assert.equal(await host.locator('#quota-siblings .quota-sibling').first().evaluate(e=>e.getRootNode().activeElement?.classList.contains('quota-sibling')),true);
+    assert.match(await host.locator('#active-group-name').textContent(),/Gemini/);
     assert.match(await host.locator('#five-balance').textContent(),/83\.4%/);
-    await host.locator('.group-trigger').click();
     await page.locator('[aria-label="Message input"]').click();
     assert.equal(await host.locator('#context-card').isVisible(),false);
-    assert.equal(await host.locator('.group-menu').isVisible(),false);
     assert.equal(await page.locator('[aria-label="Message input"]').evaluate(e=>document.activeElement===e),true);
     await page.evaluate(()=>window.testComposerClicks=0);
-    await contextChip.hover();await host.locator('.group-trigger').click();
+    await contextChip.hover();
+    await host.locator('#context-card').waitFor({state:'visible'});
     const value=await host.locator('#context-percent').textContent();
     await page.evaluate(mode=>document.body.dataset.theme=mode==='dark'?'light':'dark',mode);
     await page.waitForFunction(mode=>document.getElementById('ag-pulse-status-bar')?.dataset.pulseTheme!==mode,mode);
     assert.equal(await host.locator('#context-percent').textContent(),value);
-    assert.equal(await host.locator('.group-menu').isVisible(),true);
+    assert.equal(await host.locator('#context-card').isVisible(),true);
     await page.keyboard.press('Escape');
     assert.equal(await host.locator('.card:popover-open').count(),0);
     await page.evaluate(()=>document.getElementById('test-scroll-bottom')?.remove());
@@ -321,7 +360,7 @@ try {
   report.hostOverlayOcclusion=true;
   report.quotaMenuInteraction=true;
   report.inline=report.liveSwitch=report.hostOverridesOS=true;
-  await contextChip.hover();await checkRefresh(page,host.locator('.refresh'));
+  await checkHoverQuotaRefresh(page,host,contextChip);
   assert.equal(await host.locator('#context-card').isVisible(),true,'Refreshing must not close the hover card');
   await checkAccent(page,host,true);
   await checkSurfaces(page,host,true);

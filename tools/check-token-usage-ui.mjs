@@ -67,7 +67,7 @@ try {
       };
       try{await expectText('cache-output','90,629 tok');}catch(error){
         console.log(JSON.stringify({inline,lang,errors,output:await scope.locator('#cache-output').textContent(),
-          rate:await scope.locator(inline?'#rate-note':'#health-note').textContent(),
+          rate:await scope.locator(inline?'#samples':'#health-note').textContent(),
           note:await scope.locator('#cache-note').textContent()}));throw error;
       }
       await expectText('cache-coverage','117,270 tok');

@@ -24,7 +24,7 @@ const server=createServer((req,res)=>{
  const lang=req.url.includes('zh')?'zh-CN':'en',missing=req.url.includes('missing=1');
  const controls=preview?`<header class="review"><h1>Issue #24 · 主对话与侧栏子代理</h1><p>使用真实插件代码的复现页面；会话和统计均为示例，不是实际对话。主对话：50 tok/s · 12%；侧栏子代理 A：90 tok/s · 87%；B：70 tok/s · 46%。</p><button onclick="focusMain()">聚焦主对话</button><button onclick="focusChild()">聚焦侧栏</button><button onclick="switchChild()">切换子代理 A / B</button><button onclick="fullView()">Full View</button><button onclick="location.reload()">恢复双栏</button></header>`:'';
  res.writeHead(200,{'Content-Type':'text/html;charset=utf-8'});res.end(`<!doctype html><meta charset="utf-8"><title>Issue #24 sidebar regression</title><style>${css}</style>${controls}<main id="workspace" data-cascade-id="${ids.main}"><section id="main-pane" class="pane" data-testid="conversation-view" data-cascade-id="${ids.main}"><div class="transcript">Main conversation · sample data</div>${composer('main')}</section><div id="aux-pane" class="pane" data-aux-pane-open="true"><div class="toolbar"><span>Subagent Conversation</span><button data-testid="subagent-tab-open-full-view" onclick="fullView()">Full View</button></div>${sidebar()}</div></main><script>
- history.replaceState({},'', '/c/${ids.main}');window.ids=${JSON.stringify(ids)};window.samples=${JSON.stringify(samples)};window.calls=[];window.held=[];window.holdFor=null;window.testPrefs={language:'${lang}',languageGuideDismissed:true,usageGuideDismissed:true,revision:1};
+ history.replaceState({},'', '/c/${ids.main}');window.ids=${JSON.stringify(ids)};window.samples=${JSON.stringify(samples)};window.calls=[];window.held=[];window.holdFor=undefined;window.testPrefs={language:'${lang}',languageGuideDismissed:true,usageGuideDismissed:true,revision:1};
  window.agPulseHost={getPreferences:async()=>({...testPrefs}),setPreferences:async value=>(testPrefs={...testPrefs,...value,revision:testPrefs.revision+1}),report:()=>{},getMetrics:input=>{calls.push({...input});const result=structuredClone(samples[input.conversationId]||{connection:'live',groups:[],speed:null,usage:${JSON.stringify(usage)}});result.preferences={...testPrefs};return input.conversationId===holdFor?new Promise(resolve=>held.push(()=>resolve(result))):Promise.resolve(result)}};
  window.focusMain=()=>document.querySelector('#main-pane .editor')?.focus();window.focusChild=()=>document.querySelector('#aux-pane .editor')?.focus();window.switchChild=()=>{const marker=document.getElementById('sidebar-transcript');if(marker){marker.dataset.cascadeId=marker.dataset.cascadeId===ids.child?ids.other:ids.child;focusChild();}};
  window.fullView=()=>{const aux=document.getElementById('aux-pane'),content=document.getElementById('sidebar-content'),marker=document.getElementById('sidebar-transcript'),id=marker?.dataset.cascadeId||ids.child;document.getElementById('main-pane')?.remove();content.dataset.testid='conversation-view';content.dataset.cascadeId=id;marker?.remove();aux.removeAttribute('data-aux-pane-open');aux.removeAttribute('role');document.getElementById('workspace').classList.add('full');history.replaceState({},'', '/c/'+id);focusChild();};
@@ -41,19 +41,27 @@ try{
   const page=await browser.newPage({viewport:{width:1440,height:900}});page.on('pageerror',error=>errors.push(error.message));
   try{
    await page.goto(`http://127.0.0.1:${server.address().port}/?lang=${lang}`);
-   const strip=page.locator('#ag-pulse-status-bar');await strip.waitFor();
-   const expectMetrics=async(tps,context)=>{
-    try{await page.waitForFunction(({tps,context})=>{const root=document.getElementById('ag-pulse-status-bar')?.shadowRoot;return root?.getElementById('tps')?.textContent===tps&&root?.getElementById('context-percent')?.textContent===context;},{tps,context},{timeout:2200});}
-    catch(error){throw new Error(`Expected ${tps} tok/s and ${context}: `+JSON.stringify(await strip.evaluate(e=>({scope:e.dataset.scope,parent:e.closest('.pane')?.id,tps:e.shadowRoot.getElementById('tps').textContent,context:e.shadowRoot.getElementById('context-percent').textContent,calls:window.calls.slice(-5)}))),{cause:error});}
+   const bars=page.locator('[data-ag-pulse-bar]');
+   const mainStrip=page.locator('#main-pane [data-ag-pulse-bar]');
+   const auxStrip=page.locator('#aux-pane [data-ag-pulse-bar]');
+   await mainStrip.waitFor();await auxStrip.waitFor();
+   const expectPane=async(paneId,tps,context)=>{
+    try{await page.waitForFunction(({paneId,tps,context})=>{const root=document.querySelector(`#${paneId} [data-ag-pulse-bar]`)?.shadowRoot;return root?.getElementById('tps')?.textContent===tps&&root?.getElementById('context-percent')?.textContent===context;},{paneId,tps,context},{timeout:2200});}
+    catch(error){throw new Error(`Expected ${paneId} ${tps} tok/s and ${context}: `+JSON.stringify(await page.locator(`#${paneId} [data-ag-pulse-bar]`).evaluate(e=>({scope:e.dataset.scope,id:e.id,tps:e.shadowRoot.getElementById('tps').textContent,context:e.shadowRoot.getElementById('context-percent').textContent,calls:window.calls.slice(-5)}))),{cause:error});}
    };
-   await expectMetrics('50.0','12%');
-   assert.equal(await strip.getAttribute('lang'),lang==='en'?'en':'zh-CN');
-   await page.evaluate(()=>focusChild());await expectMetrics('90.0','87%');
-   assert.equal(await strip.evaluate(e=>e.closest('.pane').id),'aux-pane');
-   assert.equal(await strip.getAttribute('data-scope'),'subagent');
-   assert.equal(await strip.locator('#cache-rate').textContent(),'60.0%');
+   const expectMetrics=(tps,context)=>expectPane('aux-pane',tps,context);
+   await expectPane('main-pane','50.0','12%');
+   await expectMetrics('90.0','87%');
+   assert.equal(await bars.count(),2,'Main and sidebar composers keep simultaneous strips');
+   assert.equal(await mainStrip.getAttribute('id'),'ag-pulse-status-bar');
+   assert.equal(await mainStrip.getAttribute('lang'),lang==='en'?'en':'zh-CN');
+   await page.evaluate(()=>focusChild());
+   await expectPane('main-pane','50.0','12%');
+   await expectMetrics('90.0','87%');
+   assert.equal(await auxStrip.getAttribute('data-scope'),'subagent');
+   assert.equal(await auxStrip.locator('#cache-rate').textContent(),'60.0%');
    assert.equal(await page.evaluate(()=>location.pathname),'/c/'+ids.main,'Sidebar does not navigate the main route');
-   assert.equal(await strip.count(),1,'Keep one focused-composer strip');
+   assert.equal(await bars.count(),2,'Focusing sidebar keeps both strips mounted');
    const settle=()=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
    // Neutral presentation wrappers do not change which transcript owns input.
    await page.evaluate(()=>{const marker=document.getElementById('sidebar-transcript'),wrap=document.createElement('div');wrap.id='message-wrapper';wrap.style.flex='1';marker.before(wrap);wrap.append(marker);});
@@ -61,13 +69,16 @@ try{
    // Transcript content and hidden/inert sibling panels must not supply an ID.
    await page.evaluate(()=>{const original=document.getElementById('sidebar-transcript');for(const mode of ['hidden','inert']){const copy=original.cloneNode(true);copy.id='decoy-'+mode;copy.dataset.cascadeId=ids.other;copy.setAttribute(mode,'');document.getElementById('sidebar-content').append(copy);}});
    await settle();await expectMetrics('90.0','87%');
-   // Ambiguity, invalid IDs and loading/replacement phases fail closed.
+   // Ambiguity, invalid IDs and loading/replacement phases fail closed cleanly without affecting main pane.
    for(const mode of ['ambiguous','invalid','missing-id','missing-marker']){
     await page.evaluate(mode=>{calls=[];const marker=document.getElementById('sidebar-transcript');if(mode==='ambiguous'){const copy=marker.cloneNode(true);copy.id='decoy-visible';copy.dataset.cascadeId=ids.other;document.getElementById('sidebar-content').append(copy);}else if(mode==='invalid')marker.dataset.cascadeId='not-a-conversation';else if(mode==='missing-id')marker.removeAttribute('data-cascade-id');else{window.detachedMarker=marker;marker.remove();}},mode);
     await expectMetrics('—','—');
-    assert.equal(await page.evaluate(()=>calls.every(call=>call.conversationId!==ids.main)),true,mode+' must not borrow main metrics');
+    await expectPane('main-pane','50.0','12%');
+    assert.equal(await auxStrip.getAttribute('data-density'),'icons');
+    assert.equal(await page.evaluate(()=>calls.filter(call=>!call.composerModel).every(call=>call.conversationId!==ids.main)),true,mode+' must not borrow main metrics');
     await page.evaluate(mode=>{if(mode==='ambiguous')document.getElementById('decoy-visible').remove();else if(mode==='missing-marker'){const replacement=window.detachedMarker.cloneNode(true);replacement.dataset.cascadeId=ids.child;document.getElementById('message-wrapper').append(replacement);delete window.detachedMarker;}else document.getElementById('sidebar-transcript').dataset.cascadeId=ids.child;},mode);
     await expectMetrics('90.0','87%');
+    assert.equal(await auxStrip.getAttribute('data-density'),'full');
    }
    await page.evaluate(()=>document.querySelectorAll('[id^="decoy-"]').forEach(element=>element.remove()));
    // The transcript is a boundary, even with many descendant-looking IDs.
@@ -79,38 +90,61 @@ try{
    for(const mode of ['wide','deep']){
     await page.evaluate(mode=>{calls=[];if(mode==='wide'){const wrapper=document.createElement('div');wrapper.id='over-budget';for(let i=0;i<128;i++)wrapper.append(document.createElement('span'));document.getElementById('sidebar-content').append(wrapper);}else{let wrapper=document.getElementById('message-wrapper');for(let i=0;i<12;i++){const next=document.createElement('div');wrapper.append(next);wrapper=next;}wrapper.append(document.getElementById('sidebar-transcript'));}},mode);
     await expectMetrics('—','—');
-    assert.equal(await page.evaluate(()=>calls.every(call=>call.conversationId!==ids.main)),true,'Over-budget ownership must not use the main route');
+    assert.equal(await page.evaluate(()=>calls.filter(call=>!call.composerModel).every(call=>call.conversationId!==ids.main)),true,'Over-budget ownership must not use the main route');
     await page.evaluate(mode=>{if(mode==='wide')document.getElementById('over-budget').remove();else{const marker=document.getElementById('sidebar-transcript');document.getElementById('message-wrapper').replaceChildren(marker);}},mode);
     await expectMetrics('90.0','87%');
    }
-   await page.evaluate(()=>focusMain());await expectMetrics('50.0','12%');
-   // A pending main refresh must neither block the focused child nor replace it.
-   await page.evaluate(()=>{holdFor=ids.main;document.getElementById('ag-pulse-status-bar').shadowRoot.querySelector('.refresh').click();});
+   await page.evaluate(()=>focusMain());await expectPane('main-pane','50.0','12%');await expectMetrics('90.0','87%');
+   // A pending main refresh must neither block the child nor replace it.
+   await page.evaluate(()=>{holdFor=ids.main;document.querySelector('#main-pane [data-ag-pulse-bar]').shadowRoot.querySelector('.refresh').click();});
    try{await page.waitForFunction(()=>held.length>=1,null,{timeout:2200});}catch(error){throw new Error('Pending-main fixture did not hold a request: '+JSON.stringify(await page.evaluate(()=>({held:held.length,holdFor,calls:calls.slice(-8),active:document.activeElement?.closest('.pane')?.id}))),{cause:error});}
-   await page.evaluate(()=>{holdFor=null;focusChild();});await expectMetrics('90.0','87%');
+   await page.evaluate(()=>{holdFor=undefined;focusChild();switchChild();});await expectMetrics('70.0','46%');
    await page.evaluate(()=>held.splice(0).forEach(resolve=>resolve()));
-   await page.waitForTimeout(80);await expectMetrics('90.0','87%');
-   await page.evaluate(()=>switchChild());await expectMetrics('70.0','46%');
-   await strip.locator('[data-card=cache]').click();await strip.locator('#open-usage').click();
-   assert.equal(await strip.locator('#usage-dashboard').evaluate(element=>element.open),true,'Sidebar usage entry opens');
+   await page.waitForTimeout(80);await expectMetrics('70.0','46%');await expectPane('main-pane','50.0','12%');
+   await auxStrip.locator('[data-card=cache]').click();await auxStrip.locator('#open-usage').click();
+   assert.equal(await auxStrip.locator('#usage-dashboard').evaluate(element=>element.open),true,'Sidebar usage entry opens');
    await page.waitForFunction(()=>calls.some(call=>call.usageSync===true&&call.conversationId===ids.other));
-   await strip.locator('#usage-dashboard #close').click();
-   await strip.locator('[data-card=context]').click();
-   assert.equal(await strip.getAttribute('lang'),lang==='en'?'en':'zh-CN','Opening usage and context must preserve language');
+   await auxStrip.locator('#usage-dashboard #close').click();
+   await auxStrip.locator('[data-card=context]').click();
+   assert.equal(await auxStrip.getAttribute('lang'),lang==='en'?'en':'zh-CN','Opening usage and context must preserve language');
    await mkdir(join(repo,'.data','issue24-validation'),{recursive:true});
    await page.screenshot({path:join(repo,'.data','issue24-validation',`sidebar-fixture-${lang}.png`)});
    await page.keyboard.press('Escape');
-   await page.evaluate(()=>fullView());await expectMetrics('70.0','46%');
-   assert.equal(await strip.count(),1);
+   await page.evaluate(()=>fullView());await expectPane('aux-pane','70.0','46%');
+   assert.equal(await bars.count(),1);assert.equal(await auxStrip.getAttribute('id'),'ag-pulse-status-bar');
    // Initial loading is also isolated, even without any previously known owner.
    await page.goto(`http://127.0.0.1:${server.address().port}/?lang=${lang}&missing=1`);
-   await strip.waitFor();await expectMetrics('—','—');
-   assert.equal(await strip.getAttribute('data-scope'),'subagent');
-   await settle();assert.equal(await page.evaluate(()=>calls.every(call=>call.conversationId!==ids.main)),true,'Unknown initial auxiliary owner must not use main route');
-   // Closing an unresolved sidebar returns to a real main composer normally.
+   await mainStrip.waitFor();await auxStrip.waitFor();
+   await expectPane('main-pane','50.0','12%');await expectMetrics('—','—');
+   assert.equal(await auxStrip.getAttribute('data-scope'),'subagent');
+   assert.equal(await auxStrip.getAttribute('data-density'),'icons');
+   assert.equal(await bars.count(),2);
+   await settle();assert.equal(await page.evaluate(()=>calls.some(call=>!call.composerModel&&call.conversationId===null)&&calls.filter(call=>!call.composerModel).every(call=>call.conversationId!==ids.main)),true,'Unknown initial auxiliary owner must not use main route');
+   // Side Question pane with model selector: empty starts with 3 compact icons and spring-expands when conversation data arrives.
+   await page.evaluate(mainMarkup=>{
+    calls=[];
+    const content=document.getElementById('sidebar-content');
+    content.innerHTML=`<div id="side-question-view" data-testid="side-question-conversation"><p>Ask a side question without interrupting the main conversation</p></div><div class="input-wrap">${mainMarkup}</div>`;
+    document.querySelector('#aux-pane .editor')?.focus();
+   },composer('main'));
+   await settle();
+   assert.equal(await bars.count(),2);
+   await expectPane('main-pane','50.0','12%');
+   await expectMetrics('—','—');
+   assert.equal(await auxStrip.getAttribute('data-density'),'icons');
+   assert.equal(await auxStrip.locator('.bar .chip:visible').count(),3);
+   await page.evaluate(()=>focusMain());await settle();
+   assert.equal(await bars.count(),2,'Focusing back on main preserves Side Question strip');
+   await page.evaluate(id=>document.getElementById('side-question-view').setAttribute('data-cascade-id',id),ids.child);
+   await expectMetrics('90.0','87%');
+   assert.equal(await auxStrip.getAttribute('data-density'),'full');
+   await expectPane('main-pane','50.0','12%');
+   await page.screenshot({path:join(repo,'.data','issue24-validation',`side-question-both-${lang}.png`)});
+   // Closing an unresolved/side pane returns to single main composer cleanly.
    await page.evaluate(()=>{document.getElementById('aux-pane').remove();focusMain();});
-   await expectMetrics('50.0','12%');
-   results.push({language:lang,siblingOwner:true,wrappedOwner:true,focusSwitch:true,routeUnchanged:true,hiddenOwnersIgnored:true,invalidAndMissingOwnersIsolated:true,ambiguousOwnersIsolated:true,longTranscriptPruned:true,wideAndDeepOwnershipBounded:true,lateMainResponseIsolated:true,childSwitch:true,usageEntry:true,fullView:true,initialLoadingIsolated:true,sidebarClose:true});
+   await page.waitForFunction(()=>document.querySelectorAll('[data-ag-pulse-bar]').length===1);
+   await expectPane('main-pane','50.0','12%');
+   results.push({language:lang,simultaneousBars:true,sideQuestionCompactAndExpand:true,siblingOwner:true,wrappedOwner:true,focusSwitch:true,routeUnchanged:true,hiddenOwnersIgnored:true,invalidAndMissingOwnersIsolated:true,ambiguousOwnersIsolated:true,longTranscriptPruned:true,wideAndDeepOwnershipBounded:true,lateMainResponseIsolated:true,childSwitch:true,usageEntry:true,fullView:true,initialLoadingIsolated:true,sidebarClose:true});
   }finally{await page.close();}
  }
  assert.deepEqual(errors,[]);console.log(JSON.stringify({cases:results,pageErrors:errors},null,2));

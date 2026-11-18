@@ -50,13 +50,24 @@ try{
   await page.goto(base+'/'+mode);
   await page.locator('[data-card="context"]').first().click();
   const scope=mode!=='panel'?page.locator('#ag-pulse-status-bar'):page.locator('.widget');
-  const refresh=async()=>{if(mode!=='panel')await page.locator('[data-testid="model-selector-trigger"]').evaluate((e,value)=>e.textContent=value,model);await scope.locator(mode==='panel'?'#refresh-button':'.refresh').click();};
+  const refresh=async()=>{if(mode!=='panel')await page.locator('[data-testid="model-selector-trigger"]').evaluate((e,value)=>e.textContent=value,model);if(mode==='panel')await scope.locator('#refresh-button').click();else await scope.evaluate(el=>el.shadowRoot.querySelector('.refresh').click());};
   const balance=scope.locator('#week-balance'),five=scope.locator(mode==='panel'?'#five-details':'#five-quota-section');
   await balance.filter({hasText:'20.0%'}).waitFor();
   assert.equal(await five.isVisible(),false,'A weekly-only group has no invented five-hour card');
   assert.match(await scope.locator(mode==='panel'?'#week-quota-title':'#week-quota-title').textContent(),/Argon/);
-  if(mode==='panel'){assert.equal(await scope.locator('#quota-group').inputValue(),'gemini-argon-wtu');assert.equal(await scope.locator('#five-summary').isVisible(),false);assert.equal(await scope.locator('#quota-overview').getAttribute('data-windows'),'1');}
-  else assert.match(await scope.locator('.group-trigger').textContent(),/Gemini \(Argon\)/);
+  assert.equal(await scope.locator(mode==='panel'?'#panel-quota-pace':'#quota-pace').isVisible(),true);
+  assert.equal(await scope.locator('#week-pace-tick').count(),0,'The time-pace tick was replaced by the hatched forecast segment');
+  assert.equal(await scope.locator('#week-forecast').isVisible(),true);
+  if(mode==='panel'){
+   assert.equal(await scope.locator('#quota-group').inputValue(),'gemini-argon-wtu');
+   assert.equal(await scope.locator('#five-summary').isVisible(),false);
+   assert.equal(await scope.locator('#quota-overview').getAttribute('data-windows'),'1');
+   assert.match(await scope.locator('#panel-group-name').textContent(),/Gemini \(Argon\)/);
+   assert.match(await scope.locator('#panel-quota-siblings').textContent(),/Claude \/ GPT/);
+  }else{
+   assert.match(await scope.locator('#active-group-name').textContent(),/Gemini \(Argon\)/);
+   assert.match(await scope.locator('#quota-siblings').textContent(),/Claude \/ GPT/);
+  }
   groups.reverse();model='Gemini Flash';await refresh();await balance.filter({hasText:'80.0%'}).waitFor();
   assert.equal(await five.isVisible(),true);
   model='Gemini 4 Argon';groups=groups.filter(g=>g.id!=='gemini-argon-wtu');await refresh();await balance.filter({hasText:'80.0%'}).waitFor();
@@ -69,18 +80,30 @@ try{
   groups.at(-1).windows.weekly={...groups.at(-1).windows.weekly,disabled:true,remaining:1};await refresh();
   await balance.filter({hasText:'Quota unavailable'}).waitFor();
   assert.equal(await scope.locator('#week-track').getAttribute('aria-valuenow'),null);
+  assert.equal(await scope.locator(mode==='panel'?'#panel-quota-pace':'#quota-pace').isVisible(),false);
+  assert.equal(await scope.locator('#week-projected-fill').evaluate(e=>e.getBoundingClientRect().width),0);
+  assert.equal(await scope.locator('#week-forecast').isVisible(),false);
   assert.equal(await five.isVisible(),false);
-  groups.at(-1).windows.weekly.disabled=false;
+  groups.at(-1).windows.weekly.disabled=false;await refresh();await balance.filter({hasText:'100.0%'}).waitFor();
   if(mode==='panel'){
    assert.equal(await scope.locator('#quota-group option[value="opaque"]').textContent(),'Gemini (Argon)');
-   await scope.locator('#quota-group').selectOption('gemini');
+   await scope.locator('#panel-quota-siblings [data-group="gemini"]').click();
+   await balance.filter({hasText:'80.0%'}).waitFor();
+   assert.match(await scope.locator('#panel-quota-siblings [data-group="opaque"]').textContent(),/Gemini \(Argon\)/);
+   await refresh();await balance.filter({hasText:'80.0%'}).waitFor();
+   model='Claude Sonnet';await refresh();await balance.filter({hasText:'60.0%'}).waitFor();
+   assert.match(await scope.locator('#panel-group-name').textContent(),/Claude \/ GPT/);
   }else{
-   await scope.locator('.group-trigger').click();
-   assert.equal(await scope.locator('[data-group="opaque"]').textContent(),'Gemini (Argon)');
-   await scope.locator('[data-group="gemini"]').click();
+   await scope.locator('#quota-siblings [data-group="gemini"]').click();
+   await balance.filter({hasText:'80.0%'}).waitFor();
+   assert.equal(await scope.locator('#quota-siblings [data-group="opaque"] .sibling-name').textContent(),'Gemini (Argon)');
+   await refresh();await balance.filter({hasText:'80.0%'}).waitFor();
+   await page.locator('[data-testid="model-selector-trigger"]').evaluate(e=>e.textContent='Claude Sonnet');
+   await balance.filter({hasText:'60.0%'}).waitFor();
+   assert.match(await scope.locator('#active-group-name').textContent(),/Claude \/ GPT/);
+   assert.equal(await scope.locator('#quota-siblings .quota-sibling').count(),2);
   }
-  await balance.filter({hasText:'80.0%'}).waitFor();model='Claude Sonnet';await refresh();await balance.filter({hasText:'80.0%'}).waitFor();
-  results.push({mode,weeklyOnly:true,zeroDoesNotFallBack:true,sharedGeminiFallback:true,opaqueIds:true,modelSwitch:true,sameIdLabelRefresh:true,manualSelectionRetained:true});await page.close();
+  results.push({mode,weeklyOnly:true,zeroDoesNotFallBack:true,sharedGeminiFallback:true,opaqueIds:true,modelSwitch:true,sameIdLabelRefresh:true,liveModelSwitchOverridesPreview:true});await page.close();
  }
  assert.deepEqual(errors,[]);console.log(JSON.stringify({results,pageErrors:errors}));
 }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}

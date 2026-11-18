@@ -67,8 +67,9 @@ try{
       await strip.locator('#context-summary').waitFor({state:'visible'});
       assert.match(await strip.locator('#context-summary').textContent(),/44%/);
       const expected=key.startsWith('legacy')?'Gemini':'Claude / GPT';
-      assert.ok((await strip.locator('.group-trigger').textContent()).includes(expected),'Model selection must read the localized composer control');
-      await strip.locator('.group-trigger').click();assert.equal(await strip.locator('.group-menu').isVisible(),true);
+      const other=key.startsWith('legacy')?'Claude / GPT':'Gemini';
+      assert.ok((await strip.locator('#active-group-name').textContent()).includes(expected),'Model selection must read the localized composer control');
+      assert.ok((await strip.locator('#quota-siblings').textContent()).includes(other),'All sibling quota groups must be visible simultaneously');
       await page.keyboard.press('Escape');
       // Empty/send/cancel/voice states do not change the structural mount.
       await page.evaluate(()=>{for(const b of document.querySelectorAll('.action')){b.setAttribute('aria-label','任意翻译');b.textContent='发送';}});

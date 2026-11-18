@@ -21,7 +21,7 @@ try{
  const page=await browser.newPage({viewport:{width:1100,height:860}}),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto('http://127.0.0.1:'+server.address().port);
 
  await page.locator('[data-card=context]').click();await page.waitForTimeout(500);assert.equal(await page.evaluate(()=>calls.length),0,'Mounting and quota refresh must not check for updates');
- await page.locator('#plugin-menu-button').click();assert.equal(await page.locator('#check-update').textContent(),'检查更新');await page.locator('#check-update').click();
+ assert.equal(await page.locator('#check-update').textContent(),'检查更新');await page.locator('#check-update').click();
  await page.locator('#update-status').filter({hasText:'已是最新版本'}).waitFor();assert.equal(await page.locator('#update-current').textContent(),'v0.8.6');assert.equal(await page.locator('#update-latest').textContent(),'v0.8.6');assert.equal(await page.locator('#update-action').isVisible(),false);assert.equal(await page.evaluate(()=>calls.length),1);
  // Check the icon against its actual button, including zoom and both themes.
  for(const zoom of [1,1.25,1.5])for(const theme of ['dark','light']){
@@ -32,23 +32,23 @@ try{
  }
  await page.evaluate(()=>{document.body.style.zoom=1;document.body.dataset.theme='dark';});
  await mkdir(join(repo,'.data/update-ui'),{recursive:true});await page.screenshot({path:join(repo,'.data/update-ui/current-zh.png')});
- await page.locator('#update-close').click();await page.locator('[data-card=context]').click();await page.locator('#card-language-en').click();await page.locator('#plugin-menu-button').click();await page.locator('#check-update').click();await page.locator('#update-status').filter({hasText:'up to date'}).waitFor();assert.equal(await page.locator('#update-title').textContent(),'Plugin update');
- await page.locator('#update-close').click();await page.evaluate(()=>{nextUpdate='available';});await page.locator('[data-card=context]').click();await page.locator('#plugin-menu-button').click();await page.locator('#check-update').click();await page.locator('#update-status').filter({hasText:'Update available'}).waitFor();assert.equal(await page.locator('#update-notes img').count(),0);assert.ok((await page.locator('#update-notes').textContent()).includes('<img'));
+ await page.locator('#update-close').click();await page.locator('[data-card=context]').click();await page.locator('#card-language-en').click();await page.locator('#check-update').click();await page.locator('#update-status').filter({hasText:'up to date'}).waitFor();assert.equal(await page.locator('#update-title').textContent(),'Plugin update');
+ await page.locator('#update-close').click();await page.evaluate(()=>{nextUpdate='available';});await page.locator('[data-card=context]').click();await page.locator('#check-update').click();await page.locator('#update-status').filter({hasText:'Update available'}).waitFor();assert.equal(await page.locator('#update-notes img').count(),0);assert.ok((await page.locator('#update-notes').textContent()).includes('<img'));
  await page.screenshot({path:join(repo,'.data/update-ui/available-en.png')});await page.locator('#update-action').click();assert.equal(await page.locator('#plugin-update-dialog').getAttribute('aria-busy'),'true');assert.equal(await page.locator('#update-progress-track').getAttribute('aria-valuenow'),'50');assert.match(await page.locator('#update-progress-value').textContent(),/0.5 \/ 1.0 MB.*50%/);await page.screenshot({path:join(repo,'.data/update-ui/downloading-en.png')});await page.locator('#update-status').filter({hasText:'Update installed'}).waitFor();assert.equal(await page.locator('#update-progress-track').getAttribute('aria-valuenow'),'100');assert.equal(await page.locator('#update-action').textContent(),'Reload plugin');await page.locator('#update-action').click();await page.locator('#update-status').filter({hasText:'Reloading'}).waitFor();
- await page.locator('#update-close').click();await page.evaluate(()=>{nextUpdate='error';});await page.locator('[data-card=context]').click();await page.locator('#plugin-menu-button').click();await page.locator('#check-update').click();await page.locator('#update-status').filter({hasText:'Update incomplete'}).waitFor();assert.match(await page.locator('#update-feedback').textContent(),/Connection failed/);assert.equal(await page.locator('#update-action').textContent(),'Retry');
+ await page.locator('#update-close').click();await page.evaluate(()=>{nextUpdate='error';});await page.locator('[data-card=context]').click();await page.locator('#check-update').click();await page.locator('#update-status').filter({hasText:'Update incomplete'}).waitFor();assert.match(await page.locator('#update-feedback').textContent(),/Connection failed/);assert.equal(await page.locator('#update-action').textContent(),'Retry');
  // The production backend returns checking immediately, then the UI polls.
  await page.evaluate(()=>{const original=agPulseHost.updatePlugin;window.checkReady=false;agPulseHost.updatePlugin=async input=>{if(input.action==='check'){calls.push(input);return {state:'checking',host:'app',currentVersion:'0.8.6'};}if(input.action==='status'){calls.push(input);return {state:checkReady?'current':'checking',host:'app',currentVersion:'0.8.6',latestVersion:'0.8.6'};}return original(input);};});
  await page.locator('#update-action').click();await page.locator('#update-status').filter({hasText:'Checking'}).waitFor();
  assert.equal(await page.locator('#plugin-update-dialog').getAttribute('aria-busy'),'true');assert.equal(await page.locator('#update-progress-track').getAttribute('aria-valuenow'),null);assert.equal(await page.locator('#plugin-update-dialog').getAttribute('data-progress'),'unknown');
  await page.locator('#update-close').click();await page.evaluate(()=>{checkReady=true;});
- await page.locator('[data-card=context]').click();await page.locator('#plugin-menu-button').click();await page.locator('#check-update').click();
+ await page.locator('[data-card=context]').click();await page.locator('#check-update').click();
  await page.locator('#update-status').filter({hasText:'up to date'}).waitFor();
  assert.equal(await page.locator('#update-action').isVisible(),false);
  await page.locator('#update-close').click();await page.locator('[data-card=context]').click();
  await page.locator('#card-language-zh-tw').click();await page.locator('[data-card=context]').click();
  const footer=await page.locator('.card-language').evaluate(row=>{const r=row.getBoundingClientRect();return {overflow:row.scrollWidth>row.clientWidth,inside:[...row.querySelectorAll('button')].filter(b=>b.getClientRects().length).every(b=>{const x=b.getBoundingClientRect();return x.left>=r.left&&x.right<=r.right+.5;})};});
- assert.equal(footer.overflow,false);assert.equal(footer.inside,true,'Three languages and update menu fit the context footer');
- await page.locator('#plugin-menu-button').click();assert.equal(await page.locator('#check-update').textContent(),'檢查更新');
+ assert.equal(footer.overflow,false);assert.equal(footer.inside,true,'Three languages and update button fit the context footer');
+ assert.equal(await page.locator('#check-update').textContent(),'檢查更新');
  await page.locator('#check-update').click();await page.locator('#update-status').filter({hasText:'已是最新版本'}).waitFor();
  assert.equal(await page.locator('#update-title').textContent(),'外掛更新');assert.equal(await page.locator('#update-close').getAttribute('aria-label'),'關閉');
  // Safe, localized failure categories explain actionable causes without paths,
@@ -68,7 +68,7 @@ try{
   await page.locator('#update-close').click();await page.locator('[data-card=context]').click();
   await page.locator(`[data-language-choice="${language}"]`).click();await page.locator('[data-card=context]').click();
   await page.evaluate(({code,detail})=>{agPulseHost.updatePlugin=async()=>({state:'error',host:'app',currentVersion:'0.8.8',latestVersion:'0.8.9',error:code,errorDetail:detail,privatePath:'C:\\private-user\\.gemini',traceback:'secret traceback'});},{code,detail});
-  await page.locator('#plugin-menu-button').click();await page.locator('#check-update').click();
+  await page.locator('#check-update').click();
   await page.locator('#update-feedback').filter({hasText:message}).waitFor();
   assert.equal(await page.locator('#update-feedback').textContent(),message);
   assert.equal(await page.locator('#plugin-update-dialog').evaluate(n=>n.textContent.includes('private-user')||n.textContent.includes('traceback')),false);

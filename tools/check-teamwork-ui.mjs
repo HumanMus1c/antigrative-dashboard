@@ -72,11 +72,9 @@ try{
    // Invalid explicit owner never falls back to the route's parent statistics.
    await page.evaluate(()=>document.querySelector('.composer').dataset.cascadeId='invalid');
    await page.waitForFunction(()=>document.getElementById('ag-pulse-status-bar')?.shadowRoot.getElementById('tps').textContent==='—');
-   // Two equally plausible visible panels: focus chooses its exact owner.
+   // Two visible composers keep independent simultaneous strips without jumping.
    await page.evaluate(([markup,id])=>{document.querySelector('.composer').dataset.cascadeId=id;document.querySelector('main').insertAdjacentHTML('beforeend',markup);document.querySelector('main > .composer .editor').focus()},[box(child),other]);
-   await page.waitForFunction(()=>document.getElementById('ag-pulse-status-bar')?.shadowRoot.getElementById('tps').textContent==='90.0');
-   assert.equal(await strip.evaluate(e=>e.closest('[data-cascade-id]').dataset.cascadeId),child);
-   assert.equal(await strip.count(),1);
+   await page.waitForFunction(()=>document.querySelectorAll('[data-ag-pulse-bar]').length===2&&document.querySelector('main > .composer [data-ag-pulse-bar]')?.shadowRoot?.getElementById('tps')?.textContent==='90.0'&&document.querySelector('main > div .composer [data-ag-pulse-bar]')?.shadowRoot?.getElementById('tps')?.textContent==='50.0');
    // A visible second editor owned by the same box is ambiguous, not arbitrary.
    await page.evaluate(()=>{const selected=document.activeElement.closest('.composer');document.querySelector('main').replaceChildren(selected);selected.firstElementChild.insertAdjacentHTML('beforeend','<div role="textbox" contenteditable="true" class="editor"></div>')});
    await strip.waitFor({state:'detached'});

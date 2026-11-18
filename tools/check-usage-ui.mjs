@@ -45,7 +45,7 @@ try{
  }
  await page.locator('[data-card=cache]').click();await page.locator('#open-usage').click();assert.equal(await page.locator('#usage-dashboard').evaluate(n=>n.open),true);
  assert.equal(await page.locator('.usage-summary>div').count(),2,'Desktop and IDE share the two-column usage entry');
- assert.deepEqual(await page.locator('.usage-unit').allTextContents(),['Token','Token']);
+ assert.deepEqual(await page.locator('.usage-unit').allTextContents(),['toks','toks']);
  assert.equal(await page.locator('#cache-card').evaluate(n=>n.hidden),true);assert.equal(await page.locator('#title').textContent(),'用量统计');
  assert.ok((await page.locator('#subtitle').textContent()).includes(ide?'Antigravity IDE':'Antigravity'));
  assert.equal(await page.locator('#usage-intro').isVisible(),true,'First use explains local data before acknowledgment');
