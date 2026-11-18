@@ -1,6 +1,6 @@
 // Dedicated IDE DOM adapter. No host classes, model labels or translated copy
 // are used to identify the composer; only its stable ID and semantic controls.
-module.exports = function createIdeSurface() {
+module.exports = function createIdeSurface({webview=false}={}) {
   const GUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const visible=e=>e?.isConnected&&!e.closest('[hidden],[inert]')&&e.getClientRects().length>0&&getComputedStyle(e).visibility!=='hidden';
   function setMarkup(target,markup) {
@@ -37,7 +37,7 @@ module.exports = function createIdeSurface() {
     if(offset<markup.length)fragment.append(document.createTextNode(decode(markup.slice(offset))));
     target.replaceChildren(fragment);
   }
-  function findComposer(previous) {
+  function findComposers() {
     const boxes=[...document.querySelectorAll('[id="antigravity.agentSidePanelInputBox"]')].filter(visible),pairs=[];
     for(const box of boxes){
       const editors=[...box.querySelectorAll('[contenteditable="true"][role="combobox"],[contenteditable="true"][role="textbox"]')].filter(visible);
@@ -51,6 +51,10 @@ module.exports = function createIdeSurface() {
       let branch=model;while(branch.parentElement!==row)branch=branch.parentElement;
       pairs.push({editor,model,row,branch,box,kind:'ide'});
     }
+    return pairs;
+  }
+  function findComposer(previous) {
+    const pairs=findComposers();
     if(pairs.length===1)return pairs[0];
     return pairs.find(p=>p.editor===document.activeElement)||pairs.find(p=>p.editor===previous?.editor)||null;
   }
@@ -94,8 +98,14 @@ module.exports = function createIdeSurface() {
     const labelWidth=label?Math.max(label.scrollWidth,label.getBoundingClientRect().width):model.scrollWidth;
     const icons=[...model.querySelectorAll('svg')],gap=parseFloat(ms.columnGap)||0;
     const modelWidth=labelWidth+icons.reduce((s,e)=>s+Math.max(14,e.getBoundingClientRect().width),0)+gap*icons.length+(parseFloat(ms.paddingLeft)||0)+(parseFloat(ms.paddingRight)||0);
-    const children=[...branch.children].filter(e=>visible(e)&&e.id!=='ag-pulse-status-bar');
+    const children=[...branch.children].filter(e=>visible(e)&&e.id!=='ag-pulse-status-bar'&&!e.hasAttribute('data-ag-pulse-bar'));
     return Math.ceil(children.reduce((sum,e)=>sum+(e.contains(model)?Math.max(modelWidth,e.getBoundingClientRect().width):e.getBoundingClientRect().width),0)+(parseFloat(style.columnGap)||0)*Math.max(0,children.length-1)+(parseFloat(style.paddingLeft)||0)+(parseFloat(style.paddingRight)||0)+2);
   }
-  return {findComposer,conversationId,conversationState,nativeReserve,setMarkup,showEmpty:true,usageHostLabel:'Antigravity IDE'};
+  // IDE 2.6 embeds the shared Agent application in its verified Jetski frame.
+  // Its composer and conversation owners follow the App contract, not the old
+  // workbench-only input ID or Preact tree. Reuse the shared widget's bounded
+  // discovery/identity rules; keep IDE labels and CSP-safe template creation.
+  // The runtime selects this mode only after verifying that specific frame.
+  if(webview===true)return {useSharedComposer:true,nativeReserve,setMarkup,showEmpty:true,usageHostLabel:'Antigravity IDE'};
+  return {findComposer,findComposers,conversationId,conversationState,nativeReserve,setMarkup,showEmpty:true,usageHostLabel:'Antigravity IDE'};
 };

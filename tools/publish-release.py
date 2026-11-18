@@ -12,6 +12,10 @@ LARGE_CONVERSATION_MODULES = tuple('sidecars/panel/' + name + '.mjs' for name in
     'collection-state', 'background-statistics', 'background-worker',
     'disk-statistics', 'usage-disk-worker',
 ))
+IDE_RUNTIME_MODULES = tuple('ide/' + name for name in (
+    'main.mjs', 'runtime.mjs', 'webview-targets.mjs', 'client.mjs',
+    'discovery.mjs', 'surface.cjs',
+))
 
 
 def checked_assets(root, tag):
@@ -28,6 +32,8 @@ def checked_assets(root, tag):
         if manifest['version'] != version:
             raise ValueError('Packaged version differs')
         for required in ['ide/package.json', 'ide/manage.py', 'ide/package.py', 'ide/README.md']:
+            archive.getinfo(prefix + required)
+        for required in IDE_RUNTIME_MODULES:
             archive.getinfo(prefix + required)
         for required in ['compat/usage-ui.cjs', 'sidecars/panel/rate-quality.mjs', 'sidecars/panel/usage.mjs']:
             archive.getinfo(prefix + required)
@@ -55,10 +61,12 @@ def checked_assets(root, tag):
         package = json.loads(archive.read('extension/package.json'))
         if package['version'] != version or package['name'] != 'antigrative-dashboard-ide':
             raise ValueError('Packaged IDE identity/version differs')
-        for name in ['extension/ide/extension.cjs', 'extension/ide/host.cjs', 'extension/ide/main.mjs',
-                     'extension/ide/surface.cjs', 'extension/ide/manage.py', 'extension/compat/inline-widget.cjs',
+        for name in ['extension/ide/extension.cjs', 'extension/ide/host.cjs',
+                     'extension/ide/manage.py', 'extension/compat/inline-widget.cjs',
                      'extension/README.md', 'extension/LICENSE']:
             archive.getinfo(name)
+        for name in IDE_RUNTIME_MODULES:
+            archive.getinfo('extension/' + name)
         for name in ['compat/usage-ui.cjs', 'sidecars/panel/rate-quality.mjs', 'sidecars/panel/usage.mjs']:
             archive.getinfo('extension/' + name)
         for name in LARGE_CONVERSATION_MODULES:

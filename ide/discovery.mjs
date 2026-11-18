@@ -32,6 +32,24 @@ export const agyServer=row=>agyExecutable.test(String(row?.Name||''))
   && !flag(row?.CommandLine,'enable_lsp')
   && !/(?:^|\s)["']?--enable_lsp(?:=|\s|$)/i.test(row?.CommandLine||'');
 
+// IDE 2.6 launches its HTTP hub with an explicit port instead of writing
+// ls-main.log. The flag is a hint only: callers must still intersect the
+// selected descendant PID's live listeners before pairing its credential.
+export function ideHubPort(row) {
+  if(!agyServer(row))return null;
+  const unquote=value=>typeof value==='string'&&value.length>=2&&['"',"'"].includes(value[0])&&value.at(-1)===value[0]?value.slice(1,-1):value;
+  const args=(String(row.CommandLine).match(/"[^"]*"|'[^']*'|[^\s]+/g)||[]).slice(1).map(unquote);let result=null,count=0;
+  for(let i=0;i<args.length;i++){
+    const arg=args[i];if(arg==='--')break;
+    const match=arg.match(/^--hub-port(?:=(.*))?$/i);if(!match)continue;
+    count++;const value=unquote(match[1]===undefined?args[++i]:match[1]);
+    if(typeof value!=='string'||!/^\d{1,5}$/.test(value))return null;
+    const port=Number(value);if(port<1||port>65535)return null;
+    result=port;
+  }
+  return count===1?result:null;
+}
+
 const legacyIdeRoot=/^(?:Antigravity IDE(?:\.exe)?|antigravity-ide)$/i;
 
 export const ideRoot=row=>{
@@ -97,7 +115,10 @@ export async function discoverIdeProcesses(debugPort,{platform=process.platform,
     // other listeners, so retain the expected CDP port for the shared fallback.
     // Unknown rows remain ancestry evidence, never socket-query candidates.
     const known=rows.filter(row=>ideRoot(row)||ideServer(row)||agyServer(row));
-    const expectedPorts=new Map(known.map(row=>[row.ProcessId,ideRoot(row)?[debugPort]:expectedApiPorts]));
+    const expectedPorts=new Map(known.map(row=>{
+      const hubPort=ideHubPort(row);
+      return [row.ProcessId,ideRoot(row)?[debugPort]:agyServer(row)?(hubPort?[hubPort]:[]):expectedApiPorts];
+    }));
     ports=await discoverWindowsPorts(known.map(row=>row.ProcessId),{run,expectedPorts});
   }else{
     const {stdout}=await run('/bin/ps',['-ww','-axo','pid=,ppid=,uid=,args='],{timeout:8000,maxBuffer:4194304});

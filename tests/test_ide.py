@@ -26,7 +26,7 @@ publisher = module('ide_release_check', 'tools/publish-release.py')
 
 
 class IdeTests(unittest.TestCase):
-    def test_release_rejects_any_missing_large_conversation_module_in_either_package(self):
+    def test_release_rejects_missing_runtime_module_in_either_package(self):
         # Recompute each package checksum after removing one required file. The
         # publisher must validate contents, not rely only on a matching digest.
         with tempfile.TemporaryDirectory() as temporary:
@@ -44,7 +44,9 @@ class IdeTests(unittest.TestCase):
                 pristine = output.read_bytes()
                 checksum = output.with_suffix(output.suffix + '.sha256')
                 original_checksum = checksum.read_bytes()
-                for name in publisher.LARGE_CONVERSATION_MODULES:
+                ide_runtime = ('ide/main.mjs', 'ide/runtime.mjs', 'ide/webview-targets.mjs',
+                               'ide/client.mjs', 'ide/discovery.mjs', 'ide/surface.cjs')
+                for name in publisher.LARGE_CONVERSATION_MODULES + ide_runtime:
                     with self.subTest(package=output.suffix, module=name):
                         removed = prefix + name
                         with zipfile.ZipFile(io.BytesIO(pristine)) as source, zipfile.ZipFile(output, 'w') as altered:
