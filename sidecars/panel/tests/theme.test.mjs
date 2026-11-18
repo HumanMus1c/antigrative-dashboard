@@ -40,3 +40,14 @@ test('missing, oversized and unreadable host config safely use the default palet
   assert.deepEqual(await readHostTheme({read:async()=> ' '.repeat(1048577)}),{});
   assert.deepEqual(await readHostTheme({read:async()=> '\uFEFF'+JSON.stringify({userSettings:{customThemeSeedsDark:{primary:'#da7756'}}})}),{dark:{primary:'#da7756'}});
 });
+
+test('font family settings are sanitized across config keys and block CSS injection',async()=>{
+  assert.deepEqual(theme.normalizeHostTheme({fontFamily:'"Inter", "Noto Sans (CJK)", sans-serif',monoFontFamily:'JetBrains Mono, monospace'}),
+    {fontFamily:"'Inter', 'Noto Sans (CJK)', sans-serif",monoFontFamily:"'JetBrains Mono', monospace"});
+  for(const bad of ['inherit','initial','unset','Noto Sans (CJK)','url(https://evil.test/f.woff2)','var(--secret)','expression(alert(1))','Inter; color:red','a'.repeat(241),'',null,42]){
+    assert.deepEqual(theme.normalizeHostTheme({fontFamily:bad,monoFontFamily:bad}),{});
+  }
+  const config={userSettings:{appearance:{fontFamily:'"Maple Mono"',monoFontFamily:'Fira Code'}}};
+  assert.deepEqual(await readHostTheme({read:async()=>JSON.stringify(config)}),{fontFamily:"'Maple Mono'",monoFontFamily:"'Fira Code'"});
+  assert.deepEqual(await readHostTheme({read:async()=>JSON.stringify({userSettings:{uiFontFamily:'Segoe UI',editorFontFamily:'Cascadia Mono'}})}),{fontFamily:"'Segoe UI'",monoFontFamily:"'Cascadia Mono'"});
+});

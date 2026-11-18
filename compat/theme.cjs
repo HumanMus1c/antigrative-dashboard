@@ -12,6 +12,35 @@ module.exports = function createAgPulseTheme() {
   function shadowCss() {
     return `:host{${declarations('dark')}}:host([data-pulse-theme="light"]){${declarations('light')}}`;
   }
+  const GENERIC_FONTS=new Set(['sans-serif','serif','monospace','system-ui','ui-sans-serif','ui-serif','ui-monospace','cursive','fantasy','emoji','math','fangsong','-apple-system','blinkmacsystemfont']);
+  const UNSAFE_FONT=/[;{}<>\\/\n\r\0]|url\s*\(|var\s*\(|expression\s*\(|javascript:|@import/i;
+  const FONT_KEYWORDS=new Set(['inherit','initial','unset','revert','revert-layer','default','none','normal']);
+  function sanitizeFontFamily(value) {
+    if(typeof value!=='string')return null;
+    const raw=value.replace(/[\r\n\t]+/g,' ').trim();
+    if(!raw||raw.length>240||UNSAFE_FONT.test(raw))return null;
+    const parts=raw.split(',').map(part=>part.trim()).filter(Boolean);
+    if(!parts.length||parts.length>12)return null;
+    const cleaned=[];
+    for(const part of parts){
+      const quoted=/^(['"]).*\1$/.test(part);
+      const name=(quoted?part.slice(1,-1):part).trim();
+      if(!name||name.length>80||FONT_KEYWORDS.has(name.toLowerCase()))return null;
+      if(quoted&&!/^[\p{L}\p{N} _.+()-]+$/u.test(name))return null;
+      if(!quoted&&!/^[\p{L}\p{N} _.-]+$/u.test(name))return null;
+      const lower=name.toLowerCase();
+      if(GENERIC_FONTS.has(lower)){cleaned.push(lower==='blinkmacsystemfont'?'BlinkMacSystemFont':lower);continue;}
+      if(name.startsWith('-'))return null;
+      cleaned.push(quoted||/[^A-Za-z0-9_-]/.test(name)?`'${name}'`:name);
+    }
+    return cleaned.join(', ');
+  }
+  function withFontFallback(family,mono=false) {
+    const clean=sanitizeFontFamily(family);if(!clean)return null;
+    const tail=clean.split(',').at(-1)?.trim().replace(/^['"]|['"]$/g,'').toLowerCase();
+    if(GENERIC_FONTS.has(tail))return clean;
+    return mono?`${clean}, ui-monospace, 'Cascadia Mono', 'Consolas', monospace`:`${clean}, 'Microsoft YaHei', sans-serif`;
+  }
   function normalizeHostTheme(value) {
     const result={};
     if(!value||typeof value!=='object'||Array.isArray(value))return result;
@@ -23,17 +52,21 @@ module.exports = function createAgPulseTheme() {
         (result[mode]||={})[key]=(color.length===4?'#'+Array.from(color.slice(1),v=>v+v).join(''):color).toLowerCase();
       }
     }
+    for(const key of ['fontFamily','monoFontFamily']){
+      const font=sanitizeFontFamily(value[key]);
+      if(font)result[key]=font;
+    }
     return result;
   }
   const luminance=rgb=>rgb.map(value=>{value/=255;return value<=.04045?value/12.92:((value+.055)/1.055)**2.4;}).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0);
   const contrast=(a,b)=>(Math.max(luminance(a),luminance(b))+.05)/(Math.min(luminance(a),luminance(b))+.05);
   const mix=(a,b,amount)=>a.map((value,i)=>Math.round(value+(b[i]-value)*amount));
   const colorCss=color=>'rgb('+color.join(' ')+')';
-  function attach(target, { embedded = false } = {}) {
+  function attach(target, { embedded = false, onChange = null } = {}) {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const canvas = document.createElement('canvas'); canvas.width=canvas.height=1;
     const context = canvas.getContext('2d', { willReadFrequently:true });
-    let stopped=false,hostTheme={};
+    let stopped=false,hostTheme={},lastSig=null;
     function rgb(color) {
       if (!color || !context || !CSS.supports('color',color)) return null;
       context.clearRect(0,0,1,1); context.fillStyle='transparent';context.fillStyle=color; context.fillRect(0,0,1,1);
@@ -129,6 +162,36 @@ module.exports = function createAgPulseTheme() {
       for(const key of ['chip','muted','subtle','label','control-text'])values[key]=rgb(readableColor(values[key],surfaces));
       return Object.fromEntries(Object.entries(values).map(([key,value])=>[key,colorCss(value)]));
     }
+    function hostCssVar(keys) {
+      for(const source of [target.parentElement,document.body,document.documentElement]){
+        if(!source)continue;
+        const computed=getComputedStyle(source);
+        for(const key of keys){
+          const clean=sanitizeFontFamily(source.style?.getPropertyValue?.(key))||sanitizeFontFamily(computed.getPropertyValue(key));
+          if(clean)return clean;
+        }
+      }
+      return null;
+    }
+    function resolvedFonts() {
+      let ui=null;
+      for(const source of [target.parentElement,document.body,document.documentElement]){
+        if(!source?.style?.fontFamily)continue;
+        const clean=sanitizeFontFamily(source.style.fontFamily);
+        if(clean){ui=clean;break;}
+      }
+      ui||=hostCssVar(['--ui-font-family','--font-sans','--font-family','--vscode-font-family','--antigravity-font-family']);
+      if(!ui&&embedded){
+        for(const source of [target.parentElement,document.body,document.documentElement]){
+          if(!source)continue;
+          const clean=sanitizeFontFamily(getComputedStyle(source).fontFamily);
+          if(clean){ui=clean;break;}
+        }
+      }
+      ui||=hostTheme.fontFamily||null;
+      const mono=hostCssVar(['--vscode-editor-font-family','--font-mono'])||hostTheme.monoFontFamily||null;
+      return { font:withFontFallback(ui,false), fontMono:withFontFallback(mono,true) };
+    }
     function update() {
       if (stopped) return;
       const theme=resolve();
@@ -140,15 +203,22 @@ module.exports = function createAgPulseTheme() {
       if(primary||values.card)values.emphasis=readableColor(primary||rgb(palettes[theme].emphasis),surfaces);
       // Severity text must also remain readable on custom surfaces.
       if(values.card)for(const key of ['success','warning','danger'])values[key]=readableColor(rgb(palettes[theme][key]),surfaces);
+      const fonts=resolvedFonts();
       for(const key of Object.keys(palettes[theme])){
         const property='--pulse-'+key,value=values[key];
         if(value){if(target.style.getPropertyValue(property)!==value)target.style.setProperty(property,value);}
         else if(target.style.getPropertyValue(property))target.style.removeProperty(property);
       }
+      for(const [property,value] of [['--pulse-font',fonts.font],['--pulse-font-mono',fonts.fontMono]]){
+        if(value){if(target.style.getPropertyValue(property)!==value)target.style.setProperty(property,value);}
+        else if(target.style.getPropertyValue(property))target.style.removeProperty(property);
+      }
+      const nextSig=JSON.stringify([theme,values.background,values.card,values.accent,fonts.font,fonts.fontMono]);
+      if(lastSig!==null&&lastSig!==nextSig){lastSig=nextSig;onChange?.(theme);}else lastSig=nextSig;
       return theme;
     }
     const observer=new MutationObserver(update);
-    const attributes=['class','style','data-theme','data-color-mode','data-theme-mode','data-vscode-theme-kind'];
+    const attributes=['class','style','data-theme','data-color-mode','data-theme-mode','data-vscode-theme-kind','data-font','data-font-family'];
     const elements=new Set([document.documentElement,document.body]);
     if (embedded) for(let element=target.parentElement;element;element=element.parentElement) elements.add(element);
     for(const element of elements) if(element) observer.observe(element,{attributes:true,attributeFilter:attributes});
