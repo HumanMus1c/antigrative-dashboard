@@ -76,9 +76,11 @@ try{
   }
   await view.locator('#speed-tab').focus();await page.keyboard.press('ArrowRight');assert.equal(await view.locator('#cache-tab').getAttribute('aria-selected'),'true');
   await page.keyboard.press('End');assert.equal(await view.locator('#context-tab').getAttribute('aria-selected'),'true');
-  assert.equal(await view.locator('#context-card').evaluate(e=>e.scrollHeight>e.clientHeight),true,'Long context/quota details scroll inside the stable frame');
-  await view.locator('#context-card').evaluate(e=>e.scrollTop=100);
-  await view.locator('#cache-tab').click();await view.locator('#context-tab').click();assert.ok(await view.locator('#context-card').evaluate(e=>e.scrollTop)>0);
+  assert.equal(await view.locator('#context-card').evaluate(e=>e.scrollHeight<=e.clientHeight+1),true,'Compact context/quota details fit cleanly inside the 580px frame');
+  await view.locator('.widget').evaluate(e=>{e.style.height='340px';});
+  await view.locator('#context-card').evaluate(e=>{e.scrollTop=60;});
+  await view.locator('#cache-tab').click();await view.locator('#context-tab').click();assert.ok(await view.locator('#context-card').evaluate(e=>e.scrollTop)>0,'Long/constrained details preserve scroll inside the stable frame');
+  await view.locator('.widget').evaluate(e=>{e.style.removeProperty('height');});
   if(mode==='opaque-iframe'){
    assert.equal(await view.locator('html').evaluate(()=>self.origin),'null');
    assert.equal(await view.locator('body').evaluate(e=>getComputedStyle(e).backgroundColor===getComputedStyle(document.querySelector('.widget')).backgroundColor),true,'SDK inline body background follows the dashboard theme');

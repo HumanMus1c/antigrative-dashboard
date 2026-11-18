@@ -17,6 +17,7 @@
     <symbol id="calendar" viewBox="0 0 16 16"><rect x="2.5" y="3.5" width="11" height="10" rx="2"/><path d="M5 2v3m6-3v3M3 7h10"/></symbol>
     <symbol id="refresh" viewBox="0 0 16 16"><path d="M12.8 6a5.1 5.1 0 1 0 .1 4M12.8 2.5V6H9.2"/></symbol>
     <symbol id="pulse" viewBox="0 0 16 16"><path d="M1 8h4l2-5 3 10 2-5h3"/></symbol>
+    <symbol id="cat" viewBox="0 0 16 16"><path d="M3 13.5V5.5l2-3.5 2.4 2.6h1.2L11 2l2 3.5v8z"/><path d="M6.2 8.6v.6M9.8 8.6v.6M7.3 11h1.4"/></symbol>
   </svg>
   <main class="widget" data-i18n-aria="strip" aria-label="Antigrative Dashboard statistics">
     <header class="widget-header">
@@ -27,7 +28,7 @@
         <button class="icon-button" id="refresh-button" type="button" data-i18n-aria="refreshStats" aria-label="Refresh statistics" title="Refresh statistics"><svg class="icon"><use href="#refresh"/></svg></button>
       </div>
     </header>
-    <p class="sampled-model"><span data-i18n="contextModel">Sampled model</span><span id="strip-model">—</span></p>
+    <div class="sampled-model"><span data-i18n="contextModel">Sampled model</span><span id="strip-model">—</span></div>
     <nav class="status-strip" role="tablist" data-i18n-aria="panelDetails" aria-label="Metric details">
       <button class="metric-chip" id="speed-tab" type="button" role="tab" data-card="speed" aria-controls="speed-card" aria-selected="true" tabindex="0">
         <span class="metric-label"><svg class="icon"><use href="#gauge"/></svg><span data-i18n="panelSpeed">Speed</span></span>
@@ -43,51 +44,65 @@
       </button>
     </nav>
     <section class="quota-overview" id="quota-overview" data-i18n-aria="panelSharedQuota" aria-label="Quota">
-      <div class="quota-mini" id="five-summary"><div><span>5h</span><strong id="five-summary-balance">—</strong></div><div class="quota-track"><i id="five-summary-fill"></i></div><p><span data-i18n="resetIn">Resets in</span><span id="five-summary-countdown">—</span></p></div>
-      <div class="quota-mini" id="week-summary"><div><span id="week-summary-label" data-i18n="weekShort">Wk</span><strong id="week-summary-balance">—</strong></div><div class="quota-track"><i id="week-summary-fill"></i></div><p><span data-i18n="resetIn">Resets in</span><span id="week-summary-countdown">—</span></p></div>
+      <div class="quota-mini" id="five-summary"><div><span>5h</span><strong id="five-summary-balance">—</strong></div><div class="quota-track"><i id="five-summary-fill"></i></div><div class="quota-mini-foot"><span data-i18n="resetIn">Resets in</span><span id="five-summary-countdown">—</span></div></div>
+      <div class="quota-mini" id="week-summary"><div><span id="week-summary-label" data-i18n="weekShort">Wk</span><strong id="week-summary-balance">—</strong></div><div class="quota-track"><i id="week-summary-fill"></i></div><div class="quota-mini-foot"><span data-i18n="resetIn">Resets in</span><span id="week-summary-countdown">—</span></div></div>
     </section>
     <section class="card-stage" data-i18n-aria="panelDetails" aria-label="Metric details">
       <article class="detail-card" id="speed-card" role="tabpanel" tabindex="0" aria-labelledby="speed-tab">
-        <div class="card-heading"><span><svg class="icon"><use href="#gauge"/></svg><span data-i18n="session">Session statistics</span></span><span class="card-tag" id="request-count">— samples</span></div>
-        <dl>
-          <div><dt><span data-i18n="modelTime">Model time</span></dt><dd id="model-time">—</dd></div>
-          <div><dt><span data-i18n="toolTime">Tool time</span></dt><dd id="tool-time">—</dd></div>
-          <div><dt><span data-i18n="ttft">Average TTFT</span></dt><dd id="ttft">—</dd></div>
-          <div class="emphasis"><dt><span data-i18n="sessionTps">Session TPS</span></dt><dd><span id="session-tps">—</span> tok/s</dd></div>
-          <div><dt><span data-i18n="latest">Last request</span></dt><dd><span id="latest-tps">—</span> tok/s</dd></div>
-          <div class="divider"><dt><span data-i18n="tokens">Response / thinking</span></dt><dd id="token-detail">—</dd></div>
+        <div class="hero-row">
+          <div class="hero-main">
+            <div class="hero-label"><svg class="icon"><use id="speed-hero-icon" href="#gauge"/></svg><span data-i18n="latestSpeed">Latest speed</span></div>
+            <div class="hero-value"><strong id="latest-tps">—</strong><span class="hero-unit" id="panel-latest-unit">tok/s</span></div>
+          </div>
+          <svg class="panel-speed-trail" id="panel-speed-trail" viewBox="0 0 120 44" aria-hidden="true"></svg>
+          <div class="style-toggle" role="group" data-i18n-aria="speedStyle" aria-label="Speed card style"><button class="style-toggle-button" type="button" id="speed-style-minimal" data-speed-style-choice="minimal"><svg class="icon"><use href="#pulse"/></svg></button><button class="style-toggle-button" type="button" id="speed-style-cat" data-speed-style-choice="cat"><svg class="icon"><use href="#cat"/></svg></button></div>
+        </div>
+        <dl class="stats-grid speed-stats">
+          <div><dt><span data-i18n="sessionAvg">Session avg</span></dt><dd><strong id="session-tps">—</strong><span class="stat-unit" id="panel-session-unit"> tok/s</span></dd></div>
+          <div><dt><span data-i18n="ttftShort">TTFT</span></dt><dd id="ttft">—</dd></div>
+          <div><dt><span data-i18n="peakSpeed">Peak</span></dt><dd><strong id="peak-tps">—</strong><span class="stat-unit"> tok/s</span></dd></div>
         </dl>
-        <p class="card-footnote" id="speed-basis">Response tokens ÷ streaming duration; session rate is time-weighted.</p>
-      </article>
-      <article class="detail-card" id="cache-card" role="tabpanel" tabindex="0" aria-labelledby="cache-tab" hidden>
-        <div class="card-heading"><span><svg class="icon"><use href="#cache"/></svg><span data-i18n="cacheTitle">Token cache</span></span><span class="card-tag" id="cache-coverage">—</span></div>
-        <dl><div><dt data-i18n="cacheRate">Cache hit</dt><dd id="cache-rate">—</dd></div><div><dt data-i18n="cacheMiss">Uncached input</dt><dd id="cache-miss">—</dd></div><div><dt data-i18n="cacheRead">Cache read</dt><dd id="cache-read">—</dd></div><div><dt data-i18n="cacheOutput">Output</dt><dd id="cache-output">—</dd></div><div id="cache-write-row" hidden><dt data-i18n="cacheWrite">Cache write</dt><dd id="cache-write">—</dd></div><div id="task-own-row" hidden><dt data-i18n="taskOwn">Current agent</dt><dd id="task-own">—</dd></div><div id="task-subagents-row" hidden><dt id="task-subagents-label"></dt><dd id="task-subagents">—</dd></div></dl><p class="card-footnote" id="cache-note" hidden></p>
-      </article>
-      <article class="detail-card" id="context-card" role="tabpanel" tabindex="0" aria-labelledby="context-tab" hidden>
-        <div class="card-heading"><span data-i18n="context">Context window</span></div>
-        <strong id="context-summary">—</strong><p id="context-tokens">—</p>
-        <div class="quota-track" role="progressbar" data-i18n-aria="context" id="context-track"><i id="context-fill"></i></div>
-        <dl><div><dt data-i18n="contextModel">Sampled model</dt><dd id="context-model">—</dd></div></dl>
-        <div class="quota-details">
-      <section class="quota-section" id="five-details" role="region" data-i18n-aria="five" aria-label="Five-hour quota">
-        <div class="card-heading"><span><svg class="icon"><use href="#clock"/></svg><span data-i18n="five">Five-hour quota</span></span><span class="card-tag group-name">—</span></div>
-        <div class="balance"><strong id="five-balance">—</strong><span><span data-i18n="remaining">remaining</span></span></div>
-        <div class="quota-track" role="progressbar" data-i18n-aria="five" aria-label="Five-hour quota remaining" id="five-track"><i id="five-fill"></i></div>
-        <dl><div><dt><span data-i18n="resetIn">Resets in</span></dt><dd class="reset-countdown" id="five-countdown">—</dd></div><div><dt><span data-i18n="resetTime">Reset time (UTC+8)</span></dt><dd id="five-reset">—</dd></div></dl>
-        <p class="card-footnote quota-note" id="five-note">Read from the account API.</p>
-      </section>
-      <section class="quota-section" id="week-details" role="region" data-i18n-aria="week" aria-label="Weekly quota">
-        <div class="card-heading"><span><svg class="icon"><use href="#calendar"/></svg><span id="week-quota-title" data-i18n="week">Weekly quota</span></span><span class="card-tag group-name">—</span></div>
-        <div class="balance"><strong id="week-balance">—</strong><span><span data-i18n="remaining">remaining</span></span></div>
-        <div class="quota-track" role="progressbar" data-i18n-aria="week" aria-label="Weekly quota remaining" id="week-track"><i id="week-fill"></i></div>
-        <dl><div><dt><span data-i18n="resetIn">Resets in</span></dt><dd class="reset-countdown" id="week-countdown">—</dd></div><div><dt><span data-i18n="resetTime">Reset time (UTC+8)</span></dt><dd id="week-reset">—</dd></div></dl>
-        <p class="card-footnote quota-note" id="week-note">Read from the account API.</p>
-      </section>
+        <div class="speed-meta">
+          <div class="speed-meta-row"><span id="speed-times">—</span><span id="token-detail">—</span></div>
+          <div class="speed-meta-row"><span id="model-time" hidden>—</span><span id="tool-time" hidden>—</span><span id="speed-basis-tag"></span><span id="request-count">— samples</span></div>
         </div>
       </article>
+      <article class="detail-card" id="cache-card" role="tabpanel" tabindex="0" aria-labelledby="cache-tab" hidden>
+        <div class="hero-row cache-hero">
+          <div class="hero-main">
+            <div class="hero-label"><svg class="icon"><use href="#cache"/></svg><span data-i18n="cacheTitle">Token usage</span></div>
+            <div class="hero-value"><strong id="cache-coverage">—</strong><span class="hero-unit" id="cache-coverage-unit">toks</span><span class="rate-pill" id="cache-rate">—</span></div>
+          </div>
+        </div>
+        <div class="cache-meter" aria-hidden="true"><i id="cache-seg-read"></i><i id="cache-seg-miss"></i><i id="cache-seg-out"></i></div>
+        <dl class="stats-grid cache-stats"><div id="cache-read-cell"><dt data-i18n="cacheRead">Cache read</dt><dd><strong id="cache-read">—</strong><span class="stat-unit" id="cache-read-unit" hidden> toks</span></dd></div><div id="cache-miss-cell"><dt data-i18n="cacheMiss">Uncached input</dt><dd><strong id="cache-miss">—</strong><span class="stat-unit" id="cache-miss-unit" hidden> toks</span></dd></div><div id="cache-output-cell"><dt data-i18n="cacheOutput">Output</dt><dd><strong id="cache-output">—</strong><span class="stat-unit" id="cache-output-unit" hidden> toks</span></dd></div><div class="span-row" id="cache-write-row" hidden><dt data-i18n="cacheWrite">Cache write</dt><dd id="cache-write">—</dd></div><div class="span-row" id="task-own-row" hidden><dt data-i18n="taskOwn">Current agent</dt><dd id="task-own">—</dd></div><div class="span-row" id="task-subagents-row" hidden><dt id="task-subagents-label"></dt><dd id="task-subagents">—</dd></div></dl><p class="card-footnote" id="cache-note" hidden></p>
+      </article>
+      <article class="detail-card" id="context-card" role="tabpanel" tabindex="0" aria-labelledby="context-tab" hidden>
+        <div class="card-heading"><span><svg class="icon"><use href="#gauge"/></svg><span data-i18n="context">Context window</span></span><span class="card-tag" id="context-model">—</span></div>
+        <div class="context-hero-row"><strong id="context-summary">—</strong><span id="context-tokens">—</span></div>
+        <div class="quota-track" role="progressbar" data-i18n-aria="context" id="context-track"><i id="context-fill"></i></div>
+        <div class="quota-spotlight-head" id="panel-active-group"><i class="spot-dot" aria-hidden="true"></i><strong class="spot-name" id="panel-group-name">—</strong><span class="pace-badge" id="panel-quota-pace" hidden><i class="pace-dot" aria-hidden="true"></i><span id="panel-quota-pace-text"></span></span></div>
+        <div class="quota-details">
+      <section class="quota-section" id="five-details" role="region" data-i18n-aria="five" aria-label="Five-hour quota">
+        <div class="quota-line"><span class="quota-name"><svg class="icon"><use href="#clock"/></svg><span data-i18n="five">Five-hour quota</span></span><span class="quota-meta"><span class="reset-countdown" id="five-countdown">—</span></span><strong class="quota-balance" id="five-balance">—</strong></div>
+        <div class="quota-track" role="progressbar" data-i18n-aria="five" aria-label="Five-hour quota remaining" id="five-track"><i class="track-actual" id="five-fill"></i><i class="track-forecast" id="five-projected-fill" aria-hidden="true"></i></div>
+        <div class="quota-forecast" id="five-forecast" hidden><span class="forecast-main" id="five-forecast-text"></span></div>
+        <div class="quota-usage" id="five-usage" hidden><span data-i18n="quotaWindowUsage">Window tokens</span><span class="quota-usage-val" id="five-usage-value">—</span></div>
+        <p class="card-footnote quota-note" id="five-note" hidden></p>
+      </section>
+      <section class="quota-section" id="week-details" role="region" data-i18n-aria="week" aria-label="Weekly quota">
+        <div class="quota-line"><span class="quota-name"><svg class="icon"><use href="#calendar"/></svg><span id="week-quota-title" data-i18n="week">Weekly quota</span></span><span class="quota-meta"><span class="reset-countdown" id="week-countdown">—</span></span><strong class="quota-balance" id="week-balance">—</strong></div>
+        <div class="quota-track" role="progressbar" data-i18n-aria="week" aria-label="Weekly quota remaining" id="week-track"><i class="track-actual" id="week-fill"></i><i class="track-forecast" id="week-projected-fill" aria-hidden="true"></i></div>
+        <div class="quota-forecast" id="week-forecast" hidden><span class="forecast-main" id="week-forecast-text"></span></div>
+        <div class="quota-usage" id="week-usage" hidden><span data-i18n="quotaWindowUsage">Window tokens</span><span class="quota-usage-val" id="week-usage-value">—</span></div>
+        <p class="card-footnote quota-note" id="week-note" hidden></p>
+      </section>
+        </div>
+        <div class="quota-siblings" id="panel-quota-siblings" hidden></div>
+      </article>
     </section>
-    <p class="health-note" id="health-note" role="status">Waiting for the first update</p>
-    <p class="health-note" id="integration-note" role="status"></p>
+    <div class="health-note" id="health-note" role="status">Waiting for the first update</div>
+    <div class="health-note" id="integration-note" role="status"></div>
   </main>
 </body>
 </html>
