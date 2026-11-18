@@ -60,3 +60,38 @@ test('IDE usage keeps a separate ledger and source across collector restarts',as
  assert.equal((await desktop.summary(account)).totalTokens,0);
  const restarted=new DesktopUsage(store,new UsageLedger(ide.directory,{source:'ide-local'}));await restarted.sync();assert.equal((await restarted.snapshot()).totalTokens,1100);assert.equal((await restarted.snapshot()).requests,1);
 });
+test('all-local scope aggregates across accounts + unauthenticated sessions and computes active quota-window reference',async t=>{
+  const ledger=await fixture(t),acctB=scope('account B'),cid3='33333333-3333-3333-3333-333333333333';
+  const now=Date.parse('2026-10-11T08:00:00Z');
+  const fiveReset=new Date(now+2*3600000).toISOString();
+  const weekReset=new Date(now+3*86400000).toISOString();
+  await ledger.ingest(account,id,raw({model:'Gemini 3.8 Pro',start:'2026-10-11T06:00:00Z',usage:{responseId:'a-1',inputTokens:'100',cacheReadTokens:'900',cacheWriteTokens:'0',outputTokens:'100'}}));
+  await ledger.ingest(account,other,raw({model:'Gemini 3.8 Pro',start:'2026-10-01T00:00:00Z',usage:{responseId:'a-old',inputTokens:'500',cacheReadTokens:'0',cacheWriteTokens:'0',outputTokens:'500'}}));
+  await ledger.ingest(acctB,cid3,raw({model:'Claude Sonnet 4.5',start:'2026-10-11T07:00:00Z',usage:{responseId:'b-1',inputTokens:'200',cacheReadTokens:'1800',cacheWriteTokens:'0',outputTokens:'200'}}));
+  await ledger.ingest(acctB,other,raw({model:'Gemini 3.8 Pro',start:'2026-10-11T06:00:00Z',usage:{responseId:'a-1',inputTokens:'100',cacheReadTokens:'900',cacheWriteTokens:'0',outputTokens:'100'}}));
+  const groups=[
+    {id:'gemini',name:'Gemini',windows:{'5h':{available:true,remaining:0.8,resetAt:fiveReset},weekly:{available:true,remaining:0.98,resetAt:weekReset}}},
+    {id:'3p',name:'Claude / GPT',windows:{'5h':{available:true,remaining:0.5,resetAt:fiveReset},weekly:{available:true,remaining:0.5,resetAt:weekReset}}},
+  ];
+  const store={identity:account,epoch:1,listConversations:async()=>[],client:{trajectory:async()=>raw()}};
+  const tracker=new DesktopUsage(store,ledger);t.after(()=>tracker.dispose());
+  const localSnap=await tracker.snapshot({sync:false,scope:'local',groups});
+  assert.equal(localSnap.scope,'local');assert.equal(localSnap.accountKey,'all-local');assert.equal(localSnap.accountsCount,2);
+  assert.equal(localSnap.requests,3);
+  assert.equal(localSnap.totalTokens,1100+1000+2200);
+  assert.equal(localSnap.quotaWindows['gemini:5h'].observedTokens,1100);
+  assert.equal(localSnap.quotaWindows['gemini:5h'].estimatedFullTokens,5500);
+  assert.equal(localSnap.quotaWindows['gemini:weekly'].observedTokens,1100);
+  assert.equal(localSnap.quotaWindows['gemini:weekly'].estimatedFullTokens,null);
+  assert.equal(localSnap.quotaWindows['3p:5h'],undefined);
+  const acctSnap=await tracker.snapshot({sync:false,scope:'account',groups});
+  assert.equal(acctSnap.scope,'account');assert.equal(acctSnap.totalTokens,2100);assert.equal(acctSnap.quotaWindows['gemini:5h'].observedTokens,1100);
+  store.identity=null;store.epoch++;
+  await ledger.ingest(scope('ag-pulse:local-unauthenticated'),cid3,raw({model:'Gemini 3.8 Flash',start:'2026-10-11T07:30:00Z',usage:{responseId:'unauth-1',inputTokens:'300',cacheReadTokens:'0',cacheWriteTokens:'0',outputTokens:'100'}}));
+  tracker.ingestLive(scope('ag-pulse:local-unauthenticated'),id,raw({usage:{responseId:'live-unauth',inputTokens:'50',cacheReadTokens:'0',cacheWriteTokens:'0',outputTokens:'50'}}));
+  await new Promise(r=>setTimeout(r,30));
+  const unauthLocal=await tracker.snapshot({sync:false,scope:'local',groups});
+  assert.equal(unauthLocal.accountAvailable,false);assert.equal(unauthLocal.accountsCount,2);assert.ok(unauthLocal.totalTokens>=1100+1000+2200+400);
+  const unauthAcct=await tracker.snapshot({sync:false,scope:'account',groups});
+  assert.equal(unauthAcct.accountAvailable,false);assert.equal(unauthAcct.totalTokens,0);
+});

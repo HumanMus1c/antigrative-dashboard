@@ -11,6 +11,7 @@ import {safeTaskUsage} from './task-usage.mjs';
 import {delegatedIds} from './delegation.mjs';
 
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const LOCAL_SCOPE = createHash('sha256').update('ag-pulse:local-unauthenticated').digest('hex');
 const BACKGROUND_RECHECK_MS=5*60*1000, BACKGROUND_MANUAL_COOLDOWN_MS=10*1000;
 export class MetricsStore {
   constructor(client = new AntigravityClient(), { history = new SessionHistory(), onTrajectory = null, onBackgroundResult = null, background = undefined, transcripts = new TranscriptReader(), owns=()=>true } = {}) {
@@ -18,16 +19,17 @@ export class MetricsStore {
     this.background=background===undefined?(typeof client.streamTrajectoryPage==='function'&&history.directory?new BackgroundStatistics({directory:join(dirname(history.directory),'collection-jobs'),owns:()=>this.owned(),onComplete:(...args)=>this.acceptBackground(...args)}):null):background;
     if(this.background&&client.reader)client.reader.isBackgroundManaged=id=>this.sessions.get(id)?.backgroundOnly===true;
     this.delegated=new DelegatedUsage(client,{owns,
-      onSource:async(scope,id,raw,options={})=>{if(this.owned()&&scope===this.identity&&this.onTrajectory&&(!options.isCurrent||options.isCurrent()===true))await this.onTrajectory(scope,id,raw,options);},
+      onSource:async(scope,id,raw,options={})=>{if(this.owned()&&scope===this.storageScope()&&this.onTrajectory&&(!options.isCurrent||options.isCurrent()===true))await this.onTrajectory(scope,id,raw,options);},
       onUpdate:async(scope,id,taskUsage,delegatedConversations)=>{
-        const entry=this.sessions.get(id);if(!this.owned()||scope!==this.identity||!entry?.data)return;
-        const epoch=this.epoch,current=()=>this.owned()&&scope===this.identity&&epoch===this.epoch&&this.sessions.get(id)===entry;
+        const entry=this.sessions.get(id);if(!this.owned()||scope!==this.storageScope()||!entry?.data)return;
+        const identity=this.identity,epoch=this.epoch,current=()=>this.owned()&&identity===this.identity&&epoch===this.epoch&&this.sessions.get(id)===entry;
         entry.data={...entry.data,taskUsage,delegatedConversations};
         try{const saved=await this.history.save(scope,id,entry.data,{isCurrent:current});if(saved&&current())entry.savedAt=saved.savedAt;}
         catch{if(current())this.persistenceError='统计暂时无法保存到本地';}
       },
     });
   }
+  storageScope(identity = this.identity) { return identity || LOCAL_SCOPE; }
   quota = null;
   quotaAt = 0;
   quotaPending = null;
@@ -54,13 +56,13 @@ export class MetricsStore {
   clearUsagePersistenceErrors(){this.usagePersistenceFailures.clear();this.usagePersistenceFailureVersions.clear();this.usagePersistenceError=false;}
 
   async cachedSession(id) {
-    if (!this.owned() || !GUID.test(id) || !this.identity) return null;
+    if (!this.owned() || !GUID.test(id)) return null;
     id=id.toLowerCase();
-    const scope = this.identity, epoch = this.epoch;
+    const identity = this.identity, scope = this.storageScope(identity), epoch = this.epoch;
     const entry = this.sessions.get(id);
     if (usableMetrics(entry?.data)) return { ...entry.data, transcriptRestoredFromHistory:!!entry.data.transcriptStats, restoredFromHistory: true, savedAt: entry.savedAt || null };
     const saved = await this.history.load(scope,id);
-    if (!this.owned() || scope !== this.identity || epoch !== this.epoch) return null;
+    if (!this.owned() || identity !== this.identity || epoch !== this.epoch) return null;
     if (!saved) return null;
     if (!this.sessions.has(id)) this.sessions.set(id,{data:saved.metrics,savedAt:saved.savedAt,updatedAt:0});
     return {...saved.metrics,transcriptRestoredFromHistory:!!saved.metrics.transcriptStats,restoredFromHistory:true,savedAt:saved.savedAt};
@@ -100,8 +102,8 @@ export class MetricsStore {
   }
 
   async acceptBackground(scope,id,result,{database,revision,isCurrent}) {
-    const entry=this.sessions.get(id),epoch=this.epoch;
-    const current=()=>isCurrent()&&this.owned()&&scope===this.identity&&epoch===this.epoch&&this.sessions.get(id)===entry;
+    const entry=this.sessions.get(id),epoch=this.epoch,identity=this.identity;
+    const current=()=>isCurrent()&&this.owned()&&scope===this.storageScope(identity)&&identity===this.identity&&epoch===this.epoch&&this.sessions.get(id)===entry;
     if(!entry||!current())return;
     const fresh=safeMetrics(result.metrics,id);
     fresh.delegatedConversations=[...new Set([...(result.delegatedIds||[]),...(entry.data?.delegatedConversations||[])])].filter(x=>GUID.test(x)).slice(0,128);
@@ -130,15 +132,15 @@ export class MetricsStore {
     if (!GUID.test(id)) throw new Error('会话标识无效');
     if (!this.owned()) throw new Error('后台已重新连接，请等待刷新');
     id=id.toLowerCase();
-    const scope = this.identity, epoch = this.epoch;
+    const identity = this.identity, scope = this.storageScope(identity), epoch = this.epoch;
     let entry = this.sessions.get(id);
     if (entry?.pending) return entry.pending;
     if (!force && entry?.data && Date.now() - entry.updatedAt < 1800) return entry.data;
     entry ||= {};
     this.sessions.set(id, entry);
-    const current = () => this.owned() && scope === this.identity && epoch === this.epoch && this.sessions.get(id) === entry;
+    const current = () => this.owned() && identity === this.identity && epoch === this.epoch && this.sessions.get(id) === entry;
     entry.pending = (async () => {
-      if (!entry.data && scope) {
+      if (!entry.data) {
         const saved = await this.history.load(scope,id);
         if (!current()) throw new Error('后台已重新连接，请等待刷新');
         if (saved) { entry.data = saved.metrics; entry.savedAt = saved.savedAt; entry.lastSuccessAt=saved.savedAt; }
@@ -161,14 +163,14 @@ export class MetricsStore {
       }
       const raw = await this.client.trajectory(id,{force,isCurrent:current});
       if (!current()) throw new Error('后台已重新连接，请等待刷新');
-      if(this.onTrajectory&&scope){try{const result=await this.onTrajectory(scope,id,raw,{isCurrent:current,guardKey:entry});if(current()&&result?.deferred!==true)this.setUsagePersistenceError('foreground:'+id,false);}catch{if(current())this.setUsagePersistenceError('foreground:'+id,true);}}
+      if(this.onTrajectory){try{const result=await this.onTrajectory(scope,id,raw,{isCurrent:current,guardKey:entry});if(current()&&result?.deferred!==true)this.setUsagePersistenceError('foreground:'+id,false);}catch{if(current())this.setUsagePersistenceError('foreground:'+id,true);}}
       if (!current()) throw new Error('后台已重新连接，请等待刷新');
       entry.collection=null;entry.lastSuccessAt=new Date().toISOString();
       const fresh = trajectoryMetrics(raw);
       fresh.delegatedConversations=[...new Set([...delegatedIds(id,raw,this.client.reader?.summaries||{}),...(entry.data?.delegatedConversations||[])])].slice(0,128);
       fresh.taskUsage=this.delegated.request(scope,id,raw,{saved:entry.data?.taskUsage,knownIds:fresh.delegatedConversations,force,isCurrent:current});
       // Optional background I/O cannot delay or fail the core metrics request.
-      try { if(scope&&this.transcripts)fresh.transcriptStats=this.transcripts.request(scope,id,raw); } catch {}
+      try { if(this.transcripts)fresh.transcriptStats=this.transcripts.request(scope,id,raw); } catch {}
       entry.data = {...reconcileMetrics(entry.data,fresh,entry.savedAt || null),conversationId:id}; entry.updatedAt = Date.now();
       try { const saved = await this.history.save(scope,id,entry.data,{isCurrent:current}); if (saved&&current()) entry.savedAt = saved.savedAt; if (current()) this.persistenceError = null; }
       catch { if(current())this.persistenceError = '统计暂时无法保存到本地'; }
@@ -185,7 +187,7 @@ export class MetricsStore {
     return entry.pending;
   }
 
-  async snapshot({ conversationId, force = false, selectLatest = true } = {}) {
+  async snapshot({ conversationId, force = false, quotaRefresh = false, selectLatest = true } = {}) {
     let connection = 'live', error = null, speed = null, sessionError = null, collection = null;
     try {
       if (!this.owned()) throw new Error('后台已重新连接，请等待刷新');
@@ -194,7 +196,7 @@ export class MetricsStore {
       if (server.pid !== this.serverPid) {
         this.epoch++; this.background?.reset();this.delegated.reset();this.transcripts?.reset(); this.quota = null; this.quotaAt = 0; this.sessions.clear(); this.identity = null; this.summaries = []; this.summariesAt = 0; this.serverPid = server.pid;this.clearUsagePersistenceErrors();
       }
-      try { await this.refreshQuota(force); }
+      try { await this.refreshQuota(force || quotaRefresh); }
       catch (e) { connection = this.quota ? 'stale' : 'offline'; error = e.message; }
       let summaries = this.summaries;
       // The inline composer already supplies its exact ID. Enumerating every

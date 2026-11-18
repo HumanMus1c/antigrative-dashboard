@@ -11,7 +11,52 @@ import {delegatedIds} from './delegation.mjs';
 import {collectionFailure} from './collection-state.mjs';
 const HASH=/^[a-f0-9]{64}$/,GUID=/^[a-f0-9-]{36}$/i;
 const hash=value=>createHash('sha256').update(value).digest('hex');
+export const LOCAL_SCOPE=hash('ag-pulse:local-unauthenticated');
 const keys=['uncached','cacheRead','cacheWrite','output'];
+export function quotaModelFamily(value){
+  const s=String(value||'');
+  if(/(?:^|[^a-z])argon(?:$|[^a-z])/i.test(s))return 'gemini-argon';
+  if(/gemini|hydrogen|carbon|orchestrator/i.test(s))return 'gemini';
+  if(/claude|sonnet|opus|haiku|anthropic|gpt|openai/i.test(s)||/(?:^|[^a-z0-9])o[134](?:$|[^a-z0-9])/i.test(s)||/^3p(?:$|[-_])/i.test(s))return '3p';
+  return null;
+}
+export function classifyQuotaGroupId(groups,model){
+  const list=Array.isArray(groups)?groups.filter(g=>g&&typeof g.id==='string'):[];
+  if(!list.length)return null;
+  const kind=quotaModelFamily(model);
+  const specific=kind&&list.find(g=>quotaModelFamily(`${g.id} ${g.name||''}`)===kind);
+  if(specific)return specific.id;
+  if(kind==='gemini-argon'){const shared=list.find(g=>g.id==='gemini'&&quotaModelFamily(`${g.id} ${g.name||''}`)==='gemini');if(shared)return shared.id;}
+  return kind?null:list[0].id;
+}
+function buildQuotaWindowSpecs(groups){
+  const specs=[],groupInfos=[];
+  for(const g of (Array.isArray(groups)?groups:[])){
+    if(!g||typeof g.id!=='string')continue;
+    groupInfos.push({id:g.id,name:String(g.name||'')});
+    for(const win of ['5h','weekly']){
+      const b=g.windows?.[win];
+      if(!b?.available||b.disabled===true)continue;
+      const endAt=typeof b.resetAt==='string'?Date.parse(b.resetAt):NaN;
+      if(!Number.isFinite(endAt))continue;
+      const dur=win==='5h'?18000000:604800000;
+      const remaining=typeof b.remaining==='number'&&Number.isFinite(b.remaining)&&b.remaining>=0&&b.remaining<=1?b.remaining:null;
+      specs.push({id:`${g.id}:${win}`,groupId:g.id,window:win,startAt:endAt-dur,endAt,resetMinute:Math.round(endAt/60000),remaining});
+    }
+  }
+  return {specs,groupInfos};
+}
+function finalizeQuotaWindows(specs,counts={}){
+  const out={};
+  for(const spec of specs){
+    const c=counts[spec.id];
+    if(!c||!c.requests)continue;
+    const usedFraction=typeof spec.remaining==='number'?Math.max(0,Math.min(1,1-spec.remaining)):null;
+    const estimatedFullTokens=c.observedTokens>0&&usedFraction!==null&&usedFraction>=0.05?Math.round(c.observedTokens/usedFraction):null;
+    out[spec.id]={observedTokens:c.observedTokens,estimatedFullTokens,requests:c.requests,usedFraction};
+  }
+  return out;
+}
 const cleanModel=value=>String(value||'Unknown').replace(/[\x00-\x1f\x7f]/g,'').slice(0,120);
 const stamp=value=>typeof value==='string'&&/^20\d\d-\d\d-\d\dT/.test(value)&&Number.isFinite(Date.parse(value))?Date.parse(value):null;
 const sum=r=>keys.reduce((n,k)=>n+(r[k]??0),0);
@@ -90,7 +135,11 @@ const validRow=r=>r&&HASH.test(r.id)&&typeof r.model==='string'&&r.model.length<
   (r.at===null||Number.isSafeInteger(r.at)&&r.at>=0)&&keys.every(k=>r[k]===null||Number.isSafeInteger(r[k])&&r[k]>=0);
 export class UsageLedger{
   constructor(directory=join(platformPaths().data,'usage-v1'),{timeZone='Asia/Shanghai',source='desktop-local'}={}){this.directory=directory;this.timeZone=timeZone;this.source=source;}
-  _gate=Promise.resolve();_barrier=Promise.resolve();_writes=new Set();_files=new Map();usageWrites=new Map();revision=0;cache=null;
+  _gate=Promise.resolve();_barrier=Promise.resolve();_writes=new Set();_files=new Map();usageWrites=new Map();revision=0;_cache=null;caches=new Map();diskSummaryPending=null;_diskSummaryRetry=null;diskSummaryRetries=new Map();
+  get cache(){return this._cache;}
+  set cache(value){this._cache=value;if(!value)this.caches.clear();else if(value.key)this.caches.set(value.key,value);}
+  get diskSummaryRetry(){return this._diskSummaryRetry;}
+  set diskSummaryRetry(value){this._diskSummaryRetry=value;if(!value)this.diskSummaryRetries.clear();else if(value.key)this.diskSummaryRetries.set(value.key,value);}
   beginUsageWrite(scope){this.usageWrites.set(scope,(this.usageWrites.get(scope)||0)+1);}
   endUsageWrite(scope){const n=(this.usageWrites.get(scope)||0)-1;if(n>0)this.usageWrites.set(scope,n);else this.usageWrites.delete(scope);}
   // Public queue remains a snapshot barrier for all outstanding writes. Its
@@ -226,44 +275,90 @@ export class UsageLedger{
     // diskQueue independently limits expensive workers to one at a time.
     return this.enqueue(file,()=>this.mergeDisk(scope,id,input,options)).finally(()=>{this.diskWrites--;this.endUsageWrite(scope);});
   }
-  startDiskSummary(scope,now,scanRevision,cacheKey,isCurrent){
-    if(this.diskSummaryPending||this.diskSummaryRetry?.key===cacheKey&&this.diskSummaryRetry.at>Date.now())return;
-    const staging=join(this.directory,scope,'.summary-'+randomUUID()+'.tmp');
-    this.diskSummaryPending=this.diskJob({action:'summary',scope,directory:join(this.directory,scope),staging,now,timeZone:this.timeZone,source:this.source},{isCurrent}).then(value=>{
-      if(!value||isCurrent()!==true)return;this.diskSummaryError=false;
-      if(this.revision===scanRevision){this.cache={key:cacheKey,revision:scanRevision,value};this.diskSummaryRetry=null;}
+  startDiskSummary(scope,now,scanRevision,cacheKey,isCurrent,options={}){
+    const retry=this.diskSummaryRetries.get(cacheKey);
+    if(this.diskSummaryPending||retry&&retry.at>Date.now())return;
+    const staging=scope==='all'?join(this.directory,'.summary-all-'+randomUUID()+'.tmp'):join(this.directory,scope,'.summary-'+randomUUID()+'.tmp');
+    this.diskSummaryPending=this.diskJob({action:'summary',scope,directory:scope==='all'?this.directory:join(this.directory,scope),buckets:options.buckets||null,quotaAccount:options.quotaAccount||null,quotaGroups:options.groupInfos||null,quotaWindowSpecs:options.specs||null,localScope:LOCAL_SCOPE,staging,now,timeZone:this.timeZone,source:this.source},{isCurrent}).then(raw=>{
+      if(!raw||isCurrent()!==true)return;this.diskSummaryError=false;
+      const {quotaWindowCounts,...value}=raw;
+      if(quotaWindowCounts)Object.defineProperty(value,'_quotaWindowCounts',{value:quotaWindowCounts,enumerable:false,configurable:true});
+      const entry={key:cacheKey,revision:scanRevision,value};
+      if(this.revision===scanRevision){this._cache=entry;this.caches.set(cacheKey,entry);this._diskSummaryRetry=null;this.diskSummaryRetries.delete(cacheKey);}
       else {
-        // Writes continued while the scan was running. Its result is usable
-        // only as a marked fallback, never as the current exact revision.
-        // Delay the next full scan to avoid repeatedly monopolizing the disk
-        // while conversation traffic is continuous.
-        if(this.cache?.key!==cacheKey||this.cache.revision<=scanRevision)this.cache={key:cacheKey,revision:scanRevision,value};
-        this.diskSummaryRetry={key:cacheKey,at:Date.now()+30000};
+        const existing=this.caches.get(cacheKey);
+        if(!existing||existing.revision<=scanRevision){this._cache=entry;this.caches.set(cacheKey,entry);}
+        const retryEntry={key:cacheKey,at:Date.now()+30000};
+        this._diskSummaryRetry=retryEntry;this.diskSummaryRetries.set(cacheKey,retryEntry);
       }
-    }).catch(()=>{if(isCurrent()===true){this.diskSummaryError=true;this.diskSummaryRetry={key:cacheKey,at:Date.now()+30000};}}).finally(async()=>{for(const suffix of ['', '-journal'])await unlink(staging+suffix).catch(()=>{});this.diskSummaryPending=null;});
+    }).catch(()=>{if(isCurrent()===true){this.diskSummaryError=true;const retryEntry={key:cacheKey,at:Date.now()+30000};this._diskSummaryRetry=retryEntry;this.diskSummaryRetries.set(cacheKey,retryEntry);}}).finally(async()=>{for(const suffix of ['', '-journal'])await unlink(staging+suffix).catch(()=>{});this.diskSummaryPending=null;});
   }
-  async summary(scope,now=Date.now(),{isCurrent=()=>true}={}){
-    if(!scope||!HASH.test(scope))return null;
-    const today=dateKey(now,this.timeZone),cacheKey=scope+':'+today;
-    const unknown=()=>({accountKey:scope,timeZone:this.timeZone,today,days:[],models:[],todayTokens:null,weekTokens:null,monthTokens:null,totalTokens:null,requests:null,unreadableFiles:0,source:this.source,summaryStale:true});
-    if(this.usageWrites.get(scope))return this.cache?.key===cacheKey?{...this.cache.value,summaryStale:true}:unknown();
-    if(this.cache?.key===cacheKey&&this.cache.revision===this.revision)return this.cache.value;
+  async listAccountBuckets(){
+    let names=[];try{names=await readdir(this.directory);}catch(e){if(e.code==='ENOENT')return [];throw e;}
+    const buckets=[];
+    for(const name of names){
+      if(!HASH.test(name))continue;
+      try{const info=await lstat(join(this.directory,name));if(info.isSymbolicLink()||!info.isDirectory())continue;buckets.push(name);}catch{}
+    }
+    return buckets;
+  }
+  async countAccounts(){
+    const buckets=await this.listAccountBuckets();let count=0;
+    for(const b of buckets){
+      if(b===LOCAL_SCOPE)continue;
+      try{const files=await readdir(join(this.directory,b));if(files.some(n=>/^[a-f0-9]{64}\.(json|sqlite)$/.test(n)))count++;}catch{}
+    }
+    return count;
+  }
+  async summary(scope,now=Date.now(),{isCurrent=()=>true,groups=null,quotaAccount=null}={}){
+    const allBuckets=scope==='all';
+    if(!scope||(!allBuckets&&!HASH.test(scope)))return null;
+    const {specs,groupInfos}=quotaAccount&&Array.isArray(groups)&&groups.length?buildQuotaWindowSpecs(groups):{specs:[],groupInfos:[]};
+    const winSig=specs.length?'|'+quotaAccount+'|'+specs.map(s=>`${s.id}@${s.resetMinute}`).join(','):'';
+    const today=dateKey(now,this.timeZone),cacheKey=scope+':'+today+winSig;
+    const finalize=rawValue=>{
+      if(!specs.length)return rawValue;
+      return {...rawValue,quotaWindows:finalizeQuotaWindows(specs,rawValue._quotaWindowCounts||{})};
+    };
+    const cached=this.caches.get(cacheKey);
+    const unknown=()=>({accountKey:allBuckets?'all-local':scope,timeZone:this.timeZone,today,days:[],models:[],todayTokens:null,weekTokens:null,monthTokens:null,totalTokens:null,requests:null,unreadableFiles:0,source:this.source,summaryStale:true,...(allBuckets?{accountsCount:0}:{}),...(specs.length?{quotaWindows:{}}:{}),});
+    const writing=allBuckets?this.usageWrites.size>0:Boolean(this.usageWrites.get(scope));
+    if(writing)return cached?{...finalize(cached.value),summaryStale:true}:unknown();
+    if(cached&&cached.revision===this.revision)return finalize(cached.value);
     const scanRevision=this.revision;
-    const daily=new Map(),models=new Set(),seen=new Map();let unreadable=0,unknownTokens=0,unknownRequests=0,partialRequests=0;
-    let files=[];try{files=await readdir(join(this.directory,scope));}catch(e){if(e.code!=='ENOENT')throw e;}
-    if(files.some(name=>/^[a-f0-9]{64}\.sqlite$/.test(name))){
-      this.startDiskSummary(scope,now,scanRevision,cacheKey,isCurrent);
-      return this.cache?.key===cacheKey?{...this.cache.value,summaryStale:true}:unknown();
+    const bucketNames=allBuckets?await this.listAccountBuckets():[scope];
+    if(!isCurrent())return null;
+    const bucketEntries=[];let hasSqlite=false;
+    for(const b of bucketNames){
+      let files=[];try{files=await readdir(join(this.directory,b));}catch(e){if(e.code!=='ENOENT')throw e;}
+      if(files.some(name=>/^[a-f0-9]{64}\.sqlite$/.test(name)))hasSqlite=true;
+      bucketEntries.push({dir:b,files});
     }
-    for(const name of files.filter(name=>/^[a-f0-9]{64}\.json$/.test(name))){
-      try{
-        const text=await this.readSummaryRecord(join(this.directory,scope,name));
-        const record=JSON.parse(text);if(record.schema!==1||record.account!==scope||!Array.isArray(record.records)||!record.records.every(validRow))throw Error('Invalid ledger');
-        for(const r of record.records){const previous=seen.get(r.id);if(!previous||sum(r)>sum(previous))seen.set(r.id,r);}
-      }catch{unreadable++;}
+    if(hasSqlite){
+      this.startDiskSummary(scope,now,scanRevision,cacheKey,isCurrent,{buckets:allBuckets?bucketNames:null,quotaAccount,groupInfos,specs});
+      return cached?{...finalize(cached.value),summaryStale:true}:unknown();
     }
+    const daily=new Map(),models=new Set(),seen=new Map(),acctIds=new Set(),activeAccounts=new Set();let unreadable=0,unknownTokens=0,unknownRequests=0,partialRequests=0;
+    for(const entry of bucketEntries){
+      const jsonFiles=entry.files.filter(name=>/^[a-f0-9]{64}\.json$/.test(name));
+      for(const name of jsonFiles){
+        try{
+          const text=await this.readSummaryRecord(join(this.directory,entry.dir,name));
+          const record=JSON.parse(text);if(record.schema!==1||record.account!==entry.dir||!Array.isArray(record.records)||!record.records.every(validRow))throw Error('Invalid ledger');
+          if(entry.dir!==LOCAL_SCOPE&&record.records.length)activeAccounts.add(entry.dir);
+          for(const r of record.records){const previous=seen.get(r.id);if(!previous||sum(r)>sum(previous))seen.set(r.id,r);if(entry.dir===quotaAccount)acctIds.add(r.id);}
+        }catch{unreadable++;}
+      }
+    }
+    const windowCounts={};
     for(const r of seen.values()){
       models.add(r.model);if(r.partial)partialRequests++;
+      if(specs.length&&r.at!==null&&acctIds.has(r.id)){
+        const gid=classifyQuotaGroupId(groupInfos,r.model);
+        for(const spec of specs)if(spec.groupId===gid&&r.at>=spec.startAt&&r.at<=spec.endAt){
+          const item=windowCounts[spec.id]||{observedTokens:0,requests:0};item.observedTokens+=sum(r);item.requests++;windowCounts[spec.id]=item;
+        }
+      }
       if(r.at===null){unknownTokens+=sum(r);unknownRequests++;continue;}
       const date=dateKey(r.at,this.timeZone);if(!daily.has(date))daily.set(date,{date,models:{}});
       const day=daily.get(date);day.models[r.model]||={uncached:0,cacheRead:0,cacheWrite:0,output:0,total:0,requests:0};
@@ -271,13 +366,15 @@ export class UsageLedger{
     }
     const days=[...daily.values()].sort((a,b)=>a.date.localeCompare(b.date));
     const total=day=>Object.values(day.models).reduce((n,r)=>n+r.total,0);
-    const value={accountKey:scope,timeZone:this.timeZone,today,days,models:[...models].sort(),todayTokens:days.filter(d=>d.date===today).reduce((n,d)=>n+total(d),0),
+    const value={accountKey:allBuckets?'all-local':scope,timeZone:this.timeZone,today,days,models:[...models].sort(),todayTokens:days.filter(d=>d.date===today).reduce((n,d)=>n+total(d),0),
       weekTokens:days.filter(d=>d.date>=weekStart(today)&&d.date<=today).reduce((n,d)=>n+total(d),0),
       monthTokens:days.filter(d=>d.date.slice(0,7)===today.slice(0,7)&&d.date<=today).reduce((n,d)=>n+total(d),0),
       totalTokens:days.reduce((n,d)=>n+total(d),0)+unknownTokens,unknownTokens,unknownRequests,partialRequests,unreadableFiles:unreadable,
-      requests:seen.size,firstDate:days[0]?.date||null,updatedAt:new Date(now).toISOString(),source:this.source};
-    if(this.revision===scanRevision&&!this.usageWrites.get(scope)){this.cache={key:cacheKey,revision:scanRevision,value};return value;}
-    return {...value,summaryStale:true};
+      requests:seen.size,firstDate:days[0]?.date||null,updatedAt:new Date(now).toISOString(),source:this.source,...(allBuckets?{accountsCount:activeAccounts.size}:{})};
+    if(specs.length)Object.defineProperty(value,'_quotaWindowCounts',{value:windowCounts,enumerable:false,configurable:true});
+    const stillWriting=allBuckets?this.usageWrites.size>0:Boolean(this.usageWrites.get(scope));
+    if(this.revision===scanRevision&&!stillWriting){const entry={key:cacheKey,revision:scanRevision,value};this._cache=entry;this.caches.set(cacheKey,entry);return finalize(value);}
+    return {...finalize(value),summaryStale:true};
   }
 }
 export function weekStart(date){const d=new Date(date+'T00:00:00Z');d.setUTCDate(d.getUTCDate()-((d.getUTCDay()+6)%7));return d.toISOString().slice(0,10);}
@@ -296,8 +393,9 @@ export class DesktopUsage{
     this.liveStates=new Map();this.liveOrphans=new Set();this.liveRecoveries=new Map();this.liveRows=0;this.liveBytes=0;this.liveGroups=0;this.liveScope=null;this.liveEpoch=null;this.liveUnknownOverflow=false;this.liveMarkedError=false;
   }
   syncing=false;lastSync=0;status='waiting';missingConversations=0;confirmedMissingConversations=0;retryingConversations=0;scope=null;scopeEpoch=null;forceQueued=false;disposed=false;continuation=null;
+  writeScope(){return this.store.identity||LOCAL_SCOPE;}
   rememberDelegates(scope,id,raw){
-    if(scope!==this.store.identity)return [];
+    if(scope!==this.writeScope())return [];
     if(this.delegatedScope!==scope||this.delegatedEpoch!==this.store.epoch){this.delegatedCandidates.clear();this.delegatedScope=scope;this.delegatedEpoch=this.store.epoch;}
     const children=delegatedIds(id,raw,this.store.client.reader?.summaries||{});
     for(const child of children){if(this.delegatedCandidates.size>=this.maxMapEntries)break;this.delegatedCandidates.set(child,{id:child});}
@@ -306,7 +404,7 @@ export class DesktopUsage{
   }
   capMap(map){while(map.size>this.maxMapEntries)map.delete(map.keys().next().value);}
   async ingest(scope,id,raw){
-    const epoch=this.store.epoch,current=()=>!this.disposed&&this.owns()&&scope===this.store.identity&&epoch===this.store.epoch;
+    const epoch=this.store.epoch,current=()=>!this.disposed&&this.owns()&&scope===this.writeScope()&&epoch===this.store.epoch;
     if(!current())return;this.rememberDelegates(scope,id,raw);await this.ledger.ingest(scope,id,raw,{isCurrent:current});
   }
   // Foreground metrics do not await usage persistence: a SQLite import or
@@ -316,7 +414,7 @@ export class DesktopUsage{
   ingestLive(scope,id,raw,options={}){
     this.refreshLiveScope();const epoch=this.store.epoch;
     const guard=typeof options.isCurrent==='function'?options.isCurrent:()=>true,guardKey=Object.hasOwn(options,'guardKey')?options.guardKey:options.isCurrent||LIVE_UNGUARDED;
-    if(this.disposed||!this.owns()||scope!==this.store.identity||!guardActive(guard))return {deferred:true};
+    if(this.disposed||!this.owns()||scope!==this.writeScope()||!guardActive(guard))return {deferred:true};
     try{
       this.ledger.file(scope,id);id=id.toLowerCase();this.rememberDelegates(scope,id,raw);
       const rows=usageRecords(raw,id,{maxRows:this.liveMaxRows,maxBytes:this.liveMaxBytes});if(!rows.length&&!rows.overflow)return {deferred:true};
@@ -333,7 +431,7 @@ export class DesktopUsage{
   }
   newLiveState(scope,id,epoch){
     const key=scope+':'+id,state={key,scope,id,epoch,pending:[],batch:null,running:false,timer:null,failures:0,failed:false,failureKind:null,needsRead:false,needsDisk:false,backgroundRequested:false,backgroundCommitted:false,backgroundGeneration:0,halted:false,recovering:false,recoveryGeneration:0,recoveryGuards:new Map(),persistedForegroundVersion:null};
-    state.current=()=>!this.disposed&&this.owns()&&state.scope===this.store.identity&&state.epoch===this.store.epoch;
+    state.current=()=>!this.disposed&&this.owns()&&state.scope===this.writeScope()&&state.epoch===this.store.epoch;
     this.liveStates.set(key,state);return state;
   }
   updateLiveError(){
@@ -354,7 +452,7 @@ export class DesktopUsage{
     else if(state.batch){this.releaseLiveGroup(state.batch);state.batch=null;}
   }
   refreshLiveScope(){
-    const scope=this.owns()&&!this.disposed?this.store.identity:null,epoch=scope?this.store.epoch:null;
+    const scope=this.owns()&&!this.disposed?this.writeScope():null,epoch=scope?this.store.epoch:null;
     if(scope===this.liveScope&&epoch===this.liveEpoch)return;
     for(const state of this.liveStates.values())this.dropLiveState(state);
     this.liveRecoveries.clear();this.liveUnknownOverflow=false;this.liveScope=scope;this.liveEpoch=epoch;this.updateLiveError();
@@ -395,7 +493,7 @@ export class DesktopUsage{
     // Recovery remembers only bounded IDs and reads this specific conversation
     // later. It never starts an automatic all-history scan.
     this.pruneLiveRecoveries();if(!guardActive(guard)){this.updateLiveError();return;}
-    if(scope!==this.store.identity||epoch!==this.store.epoch||!GUID.test(id)||!HASH.test(scope)){this.liveUnknownOverflow=true;this.updateLiveError();return;}
+    if(scope!==this.writeScope()||epoch!==this.store.epoch||!GUID.test(id)||!HASH.test(scope)){this.liveUnknownOverflow=true;this.updateLiveError();return;}
     const key=scope+':'+id,state=this.liveStates.get(key);
     if(state){this.markLiveRecovery(state,guardKey,guard,false);this.scheduleLive(state,this.liveRetryMs);}
     else if(this.liveRecoveries.size<this.liveMaxRecoveries||this.liveRecoveries.has(key)){
@@ -410,7 +508,7 @@ export class DesktopUsage{
     this.liveRecoveryTimer=setTimeout(()=>{this.liveRecoveryTimer=null;this.refreshLiveScope();this.pruneLiveRecoveries();
       while(this.liveRecoveries.size&&this.liveStates.size+this.liveOrphans.size<this.liveMaxConversations){
         const [key,item]=this.liveRecoveries.entries().next().value;this.liveRecoveries.delete(key);
-        if(item.scope!==this.store.identity||item.epoch!==this.store.epoch||!this.owns())continue;
+        if(item.scope!==this.writeScope()||item.epoch!==this.store.epoch||!this.owns())continue;
         const guards=[...item.guards].filter(([,guard])=>guardActive(guard));if(!guards.length)continue;
         const state=this.newLiveState(item.scope,item.id,item.epoch);for(const [guardKey,guard]of guards)this.markLiveRecovery(state,guardKey,guard,false);this.scheduleLive(state,0);
       }
@@ -498,7 +596,7 @@ export class DesktopUsage{
     this.scheduleLive(state,this.liveBackgroundPollMs);
   }
   async ingestDisk(scope,id,jobDb,{isCurrent=()=>true}={}){
-    const epoch=this.store.epoch,current=()=>!this.disposed&&this.owns()&&scope===this.store.identity&&epoch===this.store.epoch&&isCurrent()===true;
+    const epoch=this.store.epoch,current=()=>!this.disposed&&this.owns()&&scope===this.writeScope()&&epoch===this.store.epoch&&isCurrent()===true;
     if(!current())return;await this.ledger.ingestDisk(scope,id,jobDb,{isCurrent:current});
     if(!current())return;
     const state=this.liveStates.get(scope+':'+String(id).toLowerCase());
@@ -525,9 +623,9 @@ export class DesktopUsage{
     })().catch(()=>{this.status='offline';this.lastSync=this.now();}).finally(()=>{this.syncing=false;this.pending=null;});return this.pending;
   }
   async runSync(forceFull){
-    const scope=this.store.identity,epoch=this.store.epoch;
+    const scope=this.writeScope(),epoch=this.store.epoch;
     const current=()=>{
-      const active=!this.disposed&&this.owns()&&scope===this.store.identity&&epoch===this.store.epoch;
+      const active=!this.disposed&&this.owns()&&scope===this.writeScope()&&epoch===this.store.epoch;
       if(!active&&this.scope===scope&&this.scopeEpoch===epoch){this.fullRemaining.clear();this.fullJournal=null;}
       return active;
     };
@@ -650,15 +748,28 @@ export class DesktopUsage{
     const confirmed=[...this.passFailures].filter(id=>(journal[hash(id)]?.failures||this.readFailures.get(id)?.failures||0)>=2).length;
     return {current,missing:missing+this.passFailures.size,confirmed,retrying:missing+this.passFailures.size-confirmed,more,partial};
   }
-  async snapshot({sync=true}={}){
+  async snapshot({sync=true,scope=undefined,groups=null}={}){
     this.refreshLiveScope();
-    if(!this.store.identity)return null;
-    if(this.scope!==this.store.identity||this.scopeEpoch!==this.store.epoch){this.lastSync=0;this.status='waiting';this.missingConversations=0;this.confirmedMissingConversations=0;this.retryingConversations=0;if(this.pending)this.forceQueued=true;}
+    const identity=this.store.identity,writeScope=this.writeScope(),epoch=this.store.epoch;
+    const requestedScope=scope===undefined?(identity?'account':'local'):(scope==='account'?'account':'local');
+    if(this.scope!==writeScope||this.scopeEpoch!==epoch){this.lastSync=0;this.status='waiting';this.missingConversations=0;this.confirmedMissingConversations=0;this.retryingConversations=0;if(this.pending)this.forceQueued=true;}
     if(sync&&this.now()-this.lastSync>60000&&!this.continuation)void this.sync();
-    const scope=this.store.identity,epoch=this.store.epoch,current=()=>!this.disposed&&this.owns()&&scope===this.store.identity&&epoch===this.store.epoch;
-    const value=await this.ledger.summary(scope,Date.now(),{isCurrent:current});if(!current())return null;
-    const syncing=this.syncing||!!this.continuation||!!this.ledger.diskSummaryPending||!!this.ledger.diskWrites||value?.summaryStale===true;
-    return {...value,syncing,status:syncing?'syncing':this.status,missingConversations:this.missingConversations,confirmedMissingConversations:this.confirmedMissingConversations,retryingConversations:this.retryingConversations,persistenceError:this.store.usagePersistenceError===true||this.ledger.diskSummaryError===true};
+    const current=()=>!this.disposed&&this.owns()&&writeScope===this.writeScope()&&epoch===this.store.epoch;
+    const syncing=this.syncing||!!this.continuation||!!this.ledger.diskSummaryPending||!!this.ledger.diskWrites;
+    if(requestedScope==='account'&&!identity){
+      const today=dateKey(Date.now(),this.ledger.timeZone),accountsCount=await this.ledger.countAccounts();
+      if(!current())return null;
+      return {accountKey:null,activeAccountKey:null,scope:'account',accountAvailable:false,accountsCount,timeZone:this.ledger.timeZone,today,days:[],models:[],todayTokens:0,weekTokens:0,monthTokens:0,totalTokens:0,unknownTokens:0,unknownRequests:0,partialRequests:0,unreadableFiles:0,requests:0,firstDate:null,updatedAt:new Date().toISOString(),source:this.ledger.source,quotaWindows:{},syncing,status:syncing?'syncing':this.status,missingConversations:this.missingConversations,confirmedMissingConversations:this.confirmedMissingConversations,retryingConversations:this.retryingConversations,persistenceError:this.store.usagePersistenceError===true||this.ledger.diskSummaryError===true};
+    }
+    const ledgerTarget=requestedScope==='account'?identity:'all';
+    const value=await this.ledger.summary(ledgerTarget,Date.now(),{isCurrent:current,groups:identity?groups:null,quotaAccount:identity});if(!current())return null;
+    if(scope!==undefined&&!value?.summaryStale&&identity&&!this.ledger.diskSummaryPending&&!this.ledger.usageWrites.size){
+      const otherScope=requestedScope==='local'?identity:'all';
+      const prefix=otherScope+':'+value.today;
+      if(![...this.ledger.caches.keys()].some(k=>k.startsWith(prefix)))void this.ledger.summary(otherScope,Date.now(),{isCurrent:current,groups,quotaAccount:identity}).catch(()=>{});
+    }
+    const stillSyncing=syncing||value?.summaryStale===true;
+    return {...value,scope:requestedScope,accountKey:requestedScope==='local'?'all-local':identity,activeAccountKey:identity||null,accountAvailable:Boolean(identity),syncing:stillSyncing,status:stillSyncing?'syncing':this.status,missingConversations:this.missingConversations,confirmedMissingConversations:this.confirmedMissingConversations,retryingConversations:this.retryingConversations,persistenceError:this.store.usagePersistenceError===true||this.ledger.diskSummaryError===true};
   }
   dispose(){this.disposed=true;this.forceQueued=false;clearTimeout(this.continuation);this.continuation=null;clearTimeout(this.liveRecoveryTimer);this.liveRecoveryTimer=null;this.refreshLiveScope();this.fullRemaining.clear();this.fullJournal=null;}
 }

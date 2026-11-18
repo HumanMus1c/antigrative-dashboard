@@ -411,3 +411,26 @@ test('full recovery queue releases stale source guards and retains active source
  release();await background;await until(()=>tracker.liveStates.size===0&&tracker.liveRecoveries.size===0);assert.equal(store.usagePersistenceError,false);
  const value=await summary(ledger);assert.equal(value.requests,3);assert.equal(value.totalTokens,1800);
 });
+
+test('all-local disk worker aggregates across SQLite and JSON accounts and isolates quotaWindows',async t=>{
+ const {root,ledger}=await fixture(t),otherAcct='b'.repeat(64);await mkdir(join(ledger.directory,otherAcct),{recursive:true});
+ const file=join(root,'acct-a.sqlite');
+ const tInWin=Date.parse('2026-10-30T01:00:00Z'),tOld=Date.parse('2026-10-10T01:00:00Z');
+ job(file,[
+  {id:hash('gem-in'),at:tInWin,model:'Gemini 3.8 Pro',uncached:100,cacheRead:400,cacheWrite:0,output:100,partial:false,timeBasis:'request-start'},
+  {id:hash('gem-old'),at:tOld,model:'Gemini 3.8 Pro',uncached:1000,cacheRead:0,cacheWrite:0,output:0,partial:false,timeBasis:'request-start'},
+ ]);
+ await ledger.ingestDisk(scope,id,file);
+ await writeFile(ledger.file(otherAcct,other),JSON.stringify({schema:1,account:otherAcct,records:[
+  {id:hash('acct-b-3p'),at:tInWin,model:'Claude Opus',uncached:300,cacheRead:600,cacheWrite:0,output:100,partial:false,timeBasis:'request-start'},
+ ]}));
+ const groups=[{id:'gemini',name:'Gemini',windows:{'5h':{available:true,remaining:0.75,resetAt:new Date(tInWin+2*3600000).toISOString()}}}];
+ let result;
+ for(let i=0;i<100;i++){
+  result=await ledger.summary('all',Date.parse('2026-10-30T03:00:00Z'),{groups,quotaAccount:scope});
+  if(!ledger.diskSummaryPending)break;
+  await ledger.diskSummaryPending;
+ }
+ assert.equal(result.accountKey,'all-local');assert.equal(result.accountsCount,2);assert.equal(result.requests,3);assert.equal(result.totalTokens,2600);
+ assert.equal(result.quotaWindows['gemini:5h'].observedTokens,600);assert.equal(result.quotaWindows['gemini:5h'].estimatedFullTokens,2400);
+});

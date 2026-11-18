@@ -98,3 +98,12 @@ test('rapid renderer toggles serialize writes; failed save is visible and can be
   controller.sync({language:saved,revision});assert.equal(language.language,'en');assert.equal(controller.error,true);
   fail=false;await controller.choose('en');assert.equal(controller.error,false);assert.equal(saved,'en');
 });
+
+test('usageScope persists independently and validates choices',async t=>{
+  const {file,store}=await fixture(t);
+  await store.set({usageScope:'account'});
+  let saved=await new PreferencesStore({file}).get();assert.equal(saved.usageScope,'account');assert.equal(saved.language,null);
+  await store.set({language:'zh-CN'});await store.set({usageScope:'local'});
+  saved=await new PreferencesStore({file}).get();assert.equal(saved.usageScope,'local');assert.equal(saved.language,'zh-CN');
+  for(const bad of [{usageScope:'all'},{usageScope:null},{usageScope:''},{usageScope:'local',extra:'x'}])await assert.rejects(store.set(bad));
+});
