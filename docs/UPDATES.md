@@ -107,6 +107,11 @@ not wait for metrics discovery, so the composer controls stay mounted during a
 temporary metrics outage. Ordinary `agy`, LSP and ambiguous multi-instance
 processes are rejected.
 
+In v0.8.20 the 2.6.0 Agent Webview and its owned hub HTTP port are
+recognized as well. This fixes a connected collector remaining at
+`waiting-for-composer` and missing metrics after upgrading the IDE. The
+previous workbench-based IDE adapter remains supported.
+
 Current-conversation requests continue to be recorded during ordinary polling.
 The collector preserves existing usage records and settings. Usage is local
 observed consumption, not provider billing.
@@ -125,11 +130,11 @@ is visible. Log ports remain hints, not proof of ownership. Native discovery
 keeps its fast path; timeout/output budgets, concurrent-request coalescing and
 failure backoff remain in place. No VPN setting changes or data reset are needed.
 
-Install **v0.8.18** through **Context details → ⋯ → Check for updates**, then fully
+Install **v0.8.20** through **Context details → ⋯ → Check for updates**, then fully
 quit and reopen the host once. A plugin-only restart cannot revoke old callbacks
 already recreated in the open page. If an older updater already fails installation,
-use `antigrative-dashboard-0.8.18.zip` for a one-time manual repair; standalone IDE
-users should install `antigrative-dashboard-ide-0.8.18.vsix` and reopen the IDE.
+use `antigrative-dashboard-0.8.20.zip` for a one-time manual repair; standalone IDE
+users should install `antigrative-dashboard-ide-0.8.20.vsix` and reopen the IDE.
 Existing release tags remain available. No statistics reset or manual deletion of
 checkpoint/ledger files is required for this upgrade.
 

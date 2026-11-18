@@ -7,7 +7,7 @@
 Token throughput, cache hits and context usage in the model selector row. Hover over context for five-hour and weekly quotas too.<br>
 Keep the summary visible. Hover for the details.
 
-[![Version 0.8.18](https://img.shields.io/badge/version-0.8.18-91adff?style=flat-square&labelColor=252936)](CHANGELOG.md)
+[![Version 0.8.20](https://img.shields.io/badge/version-0.8.20-91adff?style=flat-square&labelColor=252936)](CHANGELOG.md)
 [![Platforms](https://img.shields.io/badge/host-Windows%20%7C%20Linux%20%7C%20macOS-83d8b9?style=flat-square&labelColor=252936)](COMPATIBILITY.md)
 [![Antigravity 2.21.1 / 2.22.0](https://img.shields.io/badge/Antigravity-2.21.1%20%2F%202.22.0-c5a0ff?style=flat-square&labelColor=252936)](COMPATIBILITY.md)
 [![MIT](https://img.shields.io/badge/license-MIT-d4d9e6?style=flat-square&labelColor=252936)](LICENSE)
@@ -16,7 +16,7 @@ Keep the summary visible. Hover for the details.
 
 </div>
 
-**v0.8.18:** Adapt [PR #28](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard/pull/28): improve Windows TUN discovery, show the installed version in the side panel, and distinguish Argon's weekly quota across App, IDE and CLI. [Release notes](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard/releases/tag/v0.8.18) · [Compatibility](COMPATIBILITY.md).
+**v0.8.20:** Fix the missing dashboard in standalone Antigravity IDE 2.6.0. Support its Agent Webview and owned local API port while retaining legacy IDE compatibility. [Release notes](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard/releases/tag/v0.8.20) · [Compatibility](COMPATIBILITY.md).
 
 ## Preview
 
@@ -68,7 +68,7 @@ Keep the summary visible. Hover for the details.
 ## Antigravity IDE
 
 **v0.7.0** adds a separate VSIX for Google's own standalone IDE. Download
-`antigrative-dashboard-ide-0.8.18.vsix` from the release and choose **Install from VSIX…**
+`antigrative-dashboard-ide-0.8.20.vsix` from the release and choose **Install from VSIX…**
 in the IDE's Extensions view. No desktop App installation is required.
 
 Fully quit the IDE, then start it with
@@ -76,7 +76,7 @@ Fully quit the IDE, then start it with
 Add these flags to your IDE shortcut for subsequent launches. Narrow panes show
 three icons; wider panes show values. Hover/click opens the same metric details.
 
-Windows IDE **2.5.5** has been tested with real conversations. Linux/macOS IDE
+Windows IDE **2.5.5** has been tested with real conversations; IDE **2.6.0** has been checked with a real conversation after this fix. Linux/macOS IDE
 have automated coverage; signed-in GUI acceptance is still outstanding.
 VS Code, Visual Studio, JetBrains, Zed and Xcode integrations are not implemented.
 See [IDE installation, update, diagnostics and data cleanup](ide/README.md).
@@ -231,7 +231,7 @@ Desktop: `~/.gemini/antigravity/sidecar_data/antigravity-pulse/panel/data/usage-
 
 ## Compatibility
 
-Desktop verified on **Windows 11 / Antigravity App 2.21.1 and 2.22.0**, including real context readings and the combined hover card. A separate VSIX supports standalone Antigravity IDE 2.5.5 on Windows. Other editor extensions and DSH are unsupported. Linux/macOS have automated checks; full signed-in desktop/IDE GUI verification is still open. See COMPATIBILITY.md.
+Desktop verified on **Windows 11 / Antigravity App 2.21.1 and 2.22.0**, including real context readings and the combined hover card. A separate VSIX supports standalone Antigravity IDE 2.5.5 and 2.6.0 on Windows. Other editor extensions and DSH are unsupported. Linux/macOS have automated checks; full signed-in desktop/IDE GUI verification is still open. See COMPATIBILITY.md.
 Repository presentation is inspired by [DSH Rail Music](https://github.com/YOU-SHOULD-KNOW-ME/dsh-rail-music); installation APIs differ. `dsh plugin add` cannot install this project.
 
 [Full compatibility and recovery details →](COMPATIBILITY.md)

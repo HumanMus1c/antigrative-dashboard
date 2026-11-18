@@ -40,8 +40,8 @@ implemented. The desktop App and CLI retain their separate installers.
 
 ## Install a downloaded VSIX
 
-Download `antigrative-dashboard-ide-0.8.18.vsix` and its `.vsix.sha256` from the
-[release](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard/releases/tag/v0.8.18).
+Download `antigrative-dashboard-ide-0.8.20.vsix` and its `.vsix.sha256` from the
+[release](https://github.com/YOU-SHOULD-KNOW-ME/antigrative-dashboard/releases/tag/v0.8.20).
 In Antigravity IDE, open Extensions, choose **Install from VSIX…** from the
 Extensions menu and select the file. No desktop App installation is required.
 
@@ -66,12 +66,12 @@ The debugger binds to localhost only; do not expose it to the network.
 
 ## Install / launch / uninstall from the source ZIP
 
-Download and extract `antigrative-dashboard-0.8.18.zip`, and download the VSIX to a
+Download and extract `antigrative-dashboard-0.8.20.zip`, and download the VSIX to a
 known location. Python 3.10+ is needed for this optional helper; it uses the IDE's
 bundled runtime and needs no separately installed Node.js or third-party packages.
 
 ```powershell
-python ide/manage.py install --exe 'D:\Antigravity IDE\Antigravity IDE.exe' --vsix 'C:\Downloads\antigrative-dashboard-ide-0.8.18.vsix'
+python ide/manage.py install --exe 'D:\Antigravity IDE\Antigravity IDE.exe' --vsix 'C:\Downloads\antigrative-dashboard-ide-0.8.20.vsix'
 python ide/manage.py launch --exe 'D:\Antigravity IDE\Antigravity IDE.exe'
 python ide/manage.py uninstall --exe 'D:\Antigravity IDE\Antigravity IDE.exe'
 ```
@@ -128,6 +128,11 @@ layouts. Three-platform CI runs discovery fixtures, installer/package tests and
 the production widget in Chromium with enforced Trusted Types. Linux/macOS
 signed-in IDE GUI acceptance remains outstanding.
 
+IDE **2.6.0** moves the Agent into a nested Webview. The adapter verifies the
+native Agent pane, official wrapper and its child frame before mounting. A real
+conversation in Windows IDE 2.6.0 has been checked by the user. Earlier
+workbench-based layouts remain supported.
+
 This is an unofficial adapter using private DOM/RPC interfaces. Later IDE builds
 may need an adapter update. Named/custom user profiles are not yet supported;
 use the default profile. It is distributed on GitHub, not an editor marketplace.
@@ -139,5 +144,5 @@ use the default profile. It is distributed on GitHub, not an editor marketplace.
 普通启动方式未开启连接端口时，插件无法挂载。更新后继续使用带参数的快捷方式。
 
 窄栏显示三个图标，拉宽后显示数值；语言入口仍在上下文详情底部。
-Windows IDE 2.5.5 已实机测试，Linux/macOS 的 IDE 登录界面尚待实机确认。
+Windows IDE 2.5.5 和 2.6.0 已进行真实对话验证；Linux/macOS 的 IDE 登录界面尚待实机确认。
 VS Code、Visual Studio、JetBrains、Zed、Xcode 中的 Antigravity 扩展目前尚未适配。

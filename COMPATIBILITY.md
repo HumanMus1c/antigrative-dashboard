@@ -23,14 +23,14 @@ Python 3.10+ 仅用于生命周期，无 pip 依赖；后台使用宿主 Node，
 
 2026-10-30 / **v0.8.15**：超长会话可使用资源受控的后台任务补全，完成前保留上次完整数据；无法继续时显示原因。此路径需要可用的 `node:sqlite`（Node 22.13+ 或等效宿主），推荐 Node 24；不支持时维持原保护。Windows 的合成真实进程实验不等同于反馈者原始会话或 Linux/macOS 登录后的实机验收；子代理覆盖未完成时标记为部分。详见 [超长会话限制与验证](docs/LONG_CONVERSATIONS.md)。
 
-2026-10-31 / **Issue #26 本地修复**：Antigravity IDE 2.6.0 的后台从 `language_server_* --subclient_type ide` 迁移到严格的 `agy --hub` 形式。进程发现现在同时支持两种形式，并限制在拥有当前 renderer 调试端口的 IDE 根进程的有界进程链内。renderer 的 CDP 挂载不再等待指标服务发现；指标服务暂不可用时，控件仍可挂载并返回离线状态。新增 Windows/POSIX、普通 `agy`、LSP、多实例、helper lineage 和挂载失败回归。真实登录后的 IDE 2.6.0 GUI 仍需实机验收。
+2026-10-31 / **Issue #26 本地修复**：Antigravity IDE 2.6.0 的后台从 `language_server_* --subclient_type ide` 迁移到严格的 `agy --hub` 形式。进程发现现在同时支持两种形式，并限制在拥有当前 renderer 调试端口的 IDE 根进程的有界进程链内。renderer 的 CDP 挂载不再等待指标服务发现；指标服务暂不可用时，控件仍可挂载并返回离线状态。新增 Windows/POSIX、普通 `agy`、LSP、多实例、helper lineage 和挂载失败回归。当时的后台进程发现修复尚未覆盖 2.6.0 的 Webview 挂载；该问题在 v0.8.20 中处理。
 
 ## Antigravity 自带 IDE
 
 2026-11-01 / **v0.8.17（Issue #27）**：Windows App 与 IDE 共用本机端口发现，排除 TUN 产生的伪监听行；备用查询兼容报告中的 `State: 0`，同时验证 PID、环回／通配地址、未连接远端及有效端口，拒绝 `Bound`、`Closed` 等状态。HTTP 日志与 renderer 端口只作为补查提示，不能代替进程归属证明；最新端口缺失时，不再被其他监听端口或复用的旧端口掩盖。正常路径保留 netstat，异常路径一次批量 PowerShell 查询，沿用超时、输出上限及客户端退避。本地合成回归与真实 Windows netstat／CIM 检查通过，已安装代码成功发现 App 接口并取得 `GetUserStatus` 响应；宿主停在登录引导页，未完成登录后控件验收。报告者的 TUN `State: 0` 原始环境仍需其复测。
 
-专用包为 `antigrative-dashboard-ide-0.8.18.vsix`，安装入口与桌面 App 独立。
-Windows 11 / IDE 2.5.5（VS Code base 1.107.0）已用真实对话验证速率、缓存、上下文、重启历史恢复和窄宽布局。
+专用包为 `antigrative-dashboard-ide-0.8.20.vsix`，安装入口与桌面 App 独立。
+Windows 11 / IDE 2.5.5（VS Code base 1.107.0）已用真实对话验证速率、缓存、上下文、重启历史恢复和窄宽布局。IDE 2.6.0 的控件挂载和真实对话数据已由用户验收；Linux/macOS 的登录后 IDE 界面仍待实机验证。
 Linux/macOS 的 IDE 进程筛选、端口归属、安装打包和 Trusted Types 浏览器 fixture 纳入 CI；登录后的 IDE GUI 仍待实机验收。
 当前仅支持默认用户 profile；私有 Preact/DOM 或 RPC 变化可能需要适配，不能保证未来 IDE 版本无需维护。
 插件需通过 loopback renderer 端口挂载：完整退出后带 `--remote-debugging-port=0 --remote-debugging-address=127.0.0.1` 参数启动。普通启动不会自动打开此端口。
